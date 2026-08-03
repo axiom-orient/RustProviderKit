@@ -1,0 +1,58 @@
+[workspace]
+members = [
+  "crates/rust-provider-kit-core",
+  "crates/rust-provider-kit-runtime",
+  "crates/rust-provider-kit-platform",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+authors = ["RustProviderKit contributors"]
+description = "Rust-native provider execution kit preserving RustProviderKit contracts"
+repository = "https://github.com/axiom-orient/RustProviderKit"
+homepage = "https://github.com/axiom-orient/RustProviderKit"
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+futures-core = "0.3"
+futures-util = "0.3"
+getrandom = "0.3"
+http = "1"
+httpdate = "1"
+parking_lot = "0.12"
+percent-encoding = "2"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+url = { version = "2.5", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+zeroize = { version = "1", features = ["derive"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "reference_name": "SEMIProviderKit",
+  "reference_archive_sha256": null,
+  "source_file_count": 31,
+  "test_file_count": 3,
+  "contract_count": 92,
+  "contracts": [
+    {
+      "id": "SWIFT-001",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "pkceVector",
+      "title": "PKCE generator matches RFC 7636 S256 vector and redacts verifier",
+      "body_sha256": "7f172a51a4850b4b2af94cf94bd3bab5c45d6d8489e01346008701c0de999e41"
+    },
+    {
+      "id": "SWIFT-002",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "pkceGeneration",
+      "title": "PKCE generator creates bounded unique verifier, challenge, and state",
+      "body_sha256": "9840a787732e3cb46b9daabedd2b77065218e20b74b9ec21a961ad1b71495476"
+    },
+    {
+      "id": "SWIFT-003",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "loopbackCallbackParserAcceptsExpectedCallback",
+      "title": "Loopback callback parser accepts only the expected origin path and state",
+      "body_sha256": "f1aeed80f85fcb2239b24663f6cc93206dd65c67d98c3e092aaba18c29efdc3d"
+    },
+    {
+      "id": "SWIFT-004",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "loopbackCallbackParserRejectsInvalidState",
+      "title": "Loopback callback parser rejects wrong or duplicate state without consuming the session",
+      "body_sha256": "68ec2bdda11e716c0a23f032bd6ea9283584fce1ef5e192404da56b91e8dedea"
+    },
+    {
+      "id": "SWIFT-005",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "loopbackCallbackParserRejectsOriginMismatch",
+      "title": "Loopback callback parser rejects a different host or path",
+      "body_sha256": "41871926bd78b02f4d89f0dcb8a25017e1a73088af2b8bcb677e3bff0a2fa217"
+    },
+    {
+      "id": "SWIFT-006",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "headerTerminatorScanner",
+      "title": "HTTP header terminator scanner handles byte fragments and overlaps linearly",
+      "body_sha256": "d876716e306da8aeaab8f0fa23886de2acd111509f38ca6980a7d1650f1f3b50"
+    },
+    {
+      "id": "SWIFT-007",
+      "path": "Tests/SEMIProviderAppleTests/ProviderAppleTests.swift",
+      "function": "loopbackListenerLifecycle",
+      "title": "Loopback OAuth listener binds before authorization and cancels cleanly",
+      "body_sha256": "ee4c1014d0bbcedae05a260e1ec31e2cbf1b8bd5d00286bc1b2fe95288f6de83"
+    },
+    {
+      "id": "SWIFT-008",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "pkceValidation",
+      "title": "PKCE material is bounded, redacted, and rejects malformed values",
+      "body_sha256": "c3fe792e8ddc6e334cbed3bb9385a0ff1452b8ccb2858db38f8de5ca170567e6"
+    },
+    {
+      "id": "SWIFT-009",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "identifiers",
+      "title": "Open identifiers validate and round-trip",
+      "body_sha256": "68487466f92b1e8c0a97bcd314e5faa3f70d5e5cd996173e387b2c1afd521e79"
+    },
+    {
+      "id": "SWIFT-010",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "jsonValues",
+      "title": "JSON values are deterministic and bounded",
+      "body_sha256": "5fa41d87725949d22b3cc5c3a6f8589068e0df580b38b8ab7f01c47f77d6bd5e"
+    },
+    {
+      "id": "SWIFT-011",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "turnRequest",
+      "title": "Turn request keeps provider, account, and model independent",
+      "body_sha256": "7cae94790d9cec6907533908f659df3adb5e784f7e55dc3d5207d2ffb41e5a22"
+    },
+    {
+      "id": "SWIFT-012",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "outputTokenLimits",
+      "title": "Output-token limits are explicit, bounded, and Codable",
+      "body_sha256": "877a07b6c0c1c8d85277e305ef4d764f505310e6418f910a161c5fe66665f3ab"
+    },
+    {
+      "id": "SWIFT-013",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "applicationValidatedJSONContract",
+      "title": "Application-validated JSON contracts round-trip and remain bounded",
+      "body_sha256": "bdd07b1c4d60079af0451107e3d7df3be25df45ca283179c2781bd349007f2e5"
+    },
+    {
+      "id": "SWIFT-014",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "accountReducerSuccess",
+      "title": "Account reducer stages, verifies, and activates before readiness",
+      "body_sha256": "58c438a9c35eecccdf50088c6d6af13d5b7667031b3ce93dbb4bfac4e75bb69c"
+    },
+    {
+      "id": "SWIFT-015",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "accountCompensation",
+      "title": "Account compensation failure is explicit recoveryRequired",
+      "body_sha256": "367f36e96472d5752ca2c5fe1379ed8f8c93bbdb79dbb0c17e95cc708f61e855"
+    },
+    {
+      "id": "SWIFT-016",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "executionCleanupOrdering",
+      "title": "Execution publishes terminal only after cleanup",
+      "body_sha256": "1ad58879b7f22a36bf73e507b43241d33b5d6a2b7a4867cf28654f213a4fe6fb"
+    },
+    {
+      "id": "SWIFT-017",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "executionVisibleOutputCommit",
+      "title": "Execution commits only on first visible output and can retry before it",
+      "body_sha256": "6598b76f5a54a813261db04280a5a0cf91c97aa68475191fea93d9015b9bdc4f"
+    },
+    {
+      "id": "SWIFT-018",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "boundedStreamCoalescing",
+      "title": "Bounded stream coalesces adjacent text",
+      "body_sha256": "1642d7812a4e04fe8a19bc762ed316c9c917b9c3328a06784205cabd278882d5"
+    },
+    {
+      "id": "SWIFT-019",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "tokenDeltaBatching",
+      "title": "Token-sized text deltas are batched and joined once at consumption",
+      "body_sha256": "261c72bbb648940e009a674049c892972d19e93ae5128d5ec6250ee6e018cf20"
+    },
+    {
+      "id": "SWIFT-020",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "boundedStreamOverflow",
+      "title": "Overflow is explicit and terminal remains lossless",
+      "body_sha256": "577a32a4e1cd8542527d1ed7839922ab49393810a944ad946e8cd835917a7988"
+    },
+    {
+      "id": "SWIFT-021",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "generationOverflow",
+      "title": "Reducer generations never wrap",
+      "body_sha256": "6046957e679d02cf7f53d58187ff8f7abc610444861e7e20af826fa139f6bee6"
+    },
+    {
+      "id": "SWIFT-022",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "securityBoundaryValidation",
+      "title": "Security-sensitive URLs, schemes, secrets, and fallback policy fail closed",
+      "body_sha256": "e9f4c228f23c6da39891284b8584320d2c6efe7bbf0e43be86c4eee4fc8c63e9"
+    },
+    {
+      "id": "SWIFT-023",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "turnRequestRoundTripsEveryPolicy",
+      "title": "Turn request round-trips every request policy it publicly exposes",
+      "body_sha256": "d9f54c2c1c11bbd95cb0746edd812867bfedb6544f91305a8e58b2d05df804f0"
+    },
+    {
+      "id": "SWIFT-024",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "codableValidation",
+      "title": "Codable input cannot bypass public value invariants",
+      "body_sha256": "2b8ef8cab1c3ecbf7a7ac0df982a848af06e0857822954be0041365ed4599c90"
+    },
+    {
+      "id": "SWIFT-025",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "multipleStreamConsumersFailExplicitly",
+      "title": "Public event streams reject a second consumer without crashing",
+      "body_sha256": "f181e140120cbb2427c8dd453b04e88fb6ed83ee84662b5bb3840c1012c2cc9a"
+    },
+    {
+      "id": "SWIFT-026",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "accountTerminalReservation",
+      "title": "Account stream reserves its terminal slot under backpressure",
+      "body_sha256": "849eec32ec3dd6bf2390680425f0148575f190b01c4be2b6ed06d12fee0a673f"
+    },
+    {
+      "id": "SWIFT-027",
+      "path": "Tests/SEMIProviderCoreTests/ProviderCoreTests.swift",
+      "function": "inconsistentStagedCredentialCompensates",
+      "title": "Inconsistent staged credentials enter compensation instead of leaking",
+      "body_sha256": "54d61dfdf68df1b37db69ef9de82fa64933c1f464ed88dc449ad3ba13a5949f3"
+    },
+    {
+      "id": "SWIFT-028",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "boundedOAuthReplayWindow",
+      "title": "OAuth replay ledger remains bounded and rejects recent state reuse",
+      "body_sha256": "207c3dc28e5e448efe7fee4a6144e2333c5f75c7e15f7c0fbd4950fbc20c68ab"
+    },
+    {
+      "id": "SWIFT-029",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "registry",
+      "title": "Built-in registry exposes exactly the supported provider set",
+      "body_sha256": "adf4d7b965269f2ba7c73912af6b9834df46957b7bd6d220f8ba16369e1ce9b9"
+    },
+    {
+      "id": "SWIFT-030",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "inMemoryCredentialStoreLifecycle",
+      "title": "Public in-memory credential store provides an ephemeral account lifecycle",
+      "body_sha256": "4ee07000083967c8be2526a85920a28c3df54fda8b6b66d12337b91cc1fd1f32"
+    },
+    {
+      "id": "SWIFT-031",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "sseDecoder",
+      "title": "SSE decoder handles fragmentation, CRLF, multiline data, and finish",
+      "body_sha256": "43e4ef222129fd26692ea1173284ceaef91ffbcd0e783475e5c78ec85157ba40"
+    },
+    {
+      "id": "SWIFT-032",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "sseIncrementalScan",
+      "title": "SSE fragmented lines are scanned once and all line endings are accepted",
+      "body_sha256": "3d271900207eacc7aa9ae05b6f594490f0f70b88695240f74952b7192e6a0ed7"
+    },
+    {
+      "id": "SWIFT-033",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "sseBounds",
+      "title": "SSE decoder rejects oversized and malformed UTF-8 input",
+      "body_sha256": "7439a2e1c8bcf309a83a8a9b3d3a31396d0c8dfbd3ddd019d2844891d231e136"
+    },
+    {
+      "id": "SWIFT-034",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "codexCredentialHeaderInjection",
+      "title": "Codex external credentials reject header injection at the file boundary",
+      "body_sha256": "d421b637b48c0740feb4778266a809138b6f8d94280738f86413e432256b6ccd"
+    },
+    {
+      "id": "SWIFT-035",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "codexClientVersionResolution",
+      "title": "Codex client version uses managed metadata and falls back to an installed Codex executable",
+      "body_sha256": "8f6069510baa6287ebadbdba1a3bfc2b638c804674b2bcb1b0a28015183952da"
+    },
+    {
+      "id": "SWIFT-036",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "codexClientVersionProbeIsBounded",
+      "title": "A wedged Codex installation cannot stall a turn or its deadline",
+      "body_sha256": "107a43acb5310f02bc4c751fbd1255135d05c907204e7f06614fb3ef926483b1"
+    },
+    {
+      "id": "SWIFT-037",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "secureCredentialReader",
+      "title": "Secure credential reader binds validation and read to one file descriptor",
+      "body_sha256": "bd350a0d8d877ef28cf960b0fb29f72b180a3bbd92f1a1cce31d0bd764b8f69f"
+    },
+    {
+      "id": "SWIFT-038",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openRouterEncoding",
+      "title": "OpenRouter request is direct, private by default, and does not fallback",
+      "body_sha256": "b7c0356a71e5bb4a1551d76d5c8d5f2728bc168baf3e787419d04290a0027167"
+    },
+    {
+      "id": "SWIFT-039",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "applicationValidatedJSONEncoding",
+      "title": "Application-validated JSON uses the strongest qualified provider constraint",
+      "body_sha256": "89e81c2e7b88be0d6226dafbf6eef5dafc5af0b51ecdefcf68eef9b5da0efa62"
+    },
+    {
+      "id": "SWIFT-040",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "explicitToolChoiceEncoding",
+      "title": "Explicit tool choice is encoded and never silently downgraded",
+      "body_sha256": "def6303b398bf5ceef87abb86f4bdd63a991f94fea00d1e477e1d9b8b740f654"
+    },
+    {
+      "id": "SWIFT-041",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "outputTokenLimitEncoding",
+      "title": "Output-token limits map to each provider wire dialect",
+      "body_sha256": "ad4cdc309cd90772daedf44f2fc024077a787efa2e9099abe07a5a5862b002a6"
+    },
+    {
+      "id": "SWIFT-042",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "codexRepeatedTurnHistory",
+      "title": "Codex repeated turns use caller-owned history without a continuation",
+      "body_sha256": "83011028756170bcda6d6a84e51c1f1e8c5bf9d11250064a5dbf8d281cd705df"
+    },
+    {
+      "id": "SWIFT-043",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "reasoningPolicyEncoding",
+      "title": "Reasoning policy is either encoded on the wire or rejected, never dropped",
+      "body_sha256": "50bea00ad28b61ba3d7f9bd16d73372f51ea3eb2250a0c2c01fc8656ca809f9e"
+    },
+    {
+      "id": "SWIFT-044",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "nativeSchemaQualification",
+      "title": "Native schema output is emitted only by qualified dialects",
+      "body_sha256": "cfb93524d611e5dd2f606897e2cefc8942d70e068a00837598475c36cfd61854"
+    },
+    {
+      "id": "SWIFT-045",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "qwenEndpoint",
+      "title": "Qwen requires an explicit regional endpoint",
+      "body_sha256": "c153793a937b6375183d4964c06db0c2dc7d26bd70d3316fc223161fd2dc6872"
+    },
+    {
+      "id": "SWIFT-046",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "geminiEncoding",
+      "title": "Gemini request uses current step-based Interactions contract",
+      "body_sha256": "de530cd251a1001b91992c4ccc847e4ca88c80613d66f179ce4d78335dae001d"
+    },
+    {
+      "id": "SWIFT-047",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "serverSideContinuationRetention",
+      "title": "Server-side continuations require an explicit retention opt-in",
+      "body_sha256": "0547efcf2d8d707362d9f7ba1234e2750e3f758871b4a7b54390931ea39df5ea"
+    },
+    {
+      "id": "SWIFT-048",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "codexContinuationFailsBeforeWire",
+      "title": "Runtime rejects Codex continuation before opening the provider transport",
+      "body_sha256": "35c618bef89d137a5d7fbdaf5fc3e863493bfeafa213e8e7480187fcbf8f016c"
+    },
+    {
+      "id": "SWIFT-049",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "decoders",
+      "title": "Provider decoders normalize native text, tools, usage, and completion",
+      "body_sha256": "737b764742f7c8fdc0a9d3f76efe3eebcdb33c98f7e2ed7e11af1d2b87fe4174"
+    },
+    {
+      "id": "SWIFT-050",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openRouterOAuth",
+      "title": "OpenRouter OAuth validates callback state, exchanges PKCE code, and registers once",
+      "body_sha256": "26e6a0d06a48e15d095dba3707011b0c8d57cf8cdd836ed8af1cc2827ea61408"
+    },
+    {
+      "id": "SWIFT-051",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openRouterOAuthCallbackMismatch",
+      "title": "OpenRouter OAuth rejects callback mismatch before key exchange",
+      "body_sha256": "db2207a1278f9623b9d4032ce0d489a4a53db42f042165c31bd7209bc288f402"
+    },
+    {
+      "id": "SWIFT-052",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openRouterOAuthRejectsUnexpectedOrDuplicateQueryItems",
+      "title": "OpenRouter OAuth callback accepts only the exact expected query multiset",
+      "body_sha256": "0069bc08f61dad71189ebba85d3872e3c199e757b3019d17ecbd259804a01845"
+    },
+    {
+      "id": "SWIFT-053",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "startupCredentialReconciliation",
+      "title": "Startup reconciliation removes only staged credentials and reports cleanup failures",
+      "body_sha256": "d1bfc49234863f98ed340bd736fc2588a290012b0c04f58da94b9f7c33367581"
+    },
+    {
+      "id": "SWIFT-054",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "accountRegistration",
+      "title": "Account registration stages, verifies, activates, and exposes readiness",
+      "body_sha256": "f20184538d0e50d5ae01d2b646fe7e72f07ecf2473a129f2a76b235361ea1d43"
+    },
+    {
+      "id": "SWIFT-055",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "persistedAccountRequiresVerification",
+      "title": "Persisted active accounts require verification after runtime restart",
+      "body_sha256": "19e125ee970303ae43e8300600a7ab7747ebb5512786e97fffce842bb7fa498f"
+    },
+    {
+      "id": "SWIFT-056",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "cancelRegistrationJoinsCleanup",
+      "title": "Cancelling account registration waits for compensation and transport cleanup",
+      "body_sha256": "487021cc7ce5aef1a6ec7bd13333350efc9dca4425f730c9d019726b35939f3b"
+    },
+    {
+      "id": "SWIFT-057",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "immediateRegistrationCancellation",
+      "title": "Immediate registration cancellation joins before returning",
+      "body_sha256": "657c0d42aa143d1eea0349ca20f63bb7e0e7b464f3df10cdabac93cd591388ad"
+    },
+    {
+      "id": "SWIFT-058",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "cancellationAfterNonCooperativeStage",
+      "title": "Cancellation after a non-cooperative stage compensates the stored credential",
+      "body_sha256": "db2bc48202309db8d14a0b0467315aa8a3a7abdd5c447f7ed96890ec2832310b"
+    },
+    {
+      "id": "SWIFT-059",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "cancellationBeforeActivationCommit",
+      "title": "Cancellation before activation commit compensates an already active credential",
+      "body_sha256": "fefeef8f33d132f216e2e11cd4564d48489a0b73db0bd2cc7cb6a1739e14e955"
+    },
+    {
+      "id": "SWIFT-060",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "runtimeStreaming",
+      "title": "Runtime performs direct streaming and publishes one terminal",
+      "body_sha256": "8b5115a11eabde8a89831d60dde3806215d9ff1e232ad0d6529daa064e41d5a1"
+    },
+    {
+      "id": "SWIFT-061",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "urlSessionPreStartCancellation",
+      "title": "URLSession transport fails cleanly when cancellation wins before start",
+      "body_sha256": "bd0b23af2d3f99a4ed1ba63f98305c9be410c0e48ce0ac63b34f1b2d43ba03f7"
+    },
+    {
+      "id": "SWIFT-062",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "runtimeHTTPFailure",
+      "title": "HTTP failures become typed terminal failures instead of thrown streams",
+      "body_sha256": "a2b9e664316c851ec212aad59a8536ff1e323c8fa0154f1edba1e3094c6512c2"
+    },
+    {
+      "id": "SWIFT-063",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "cancellation",
+      "title": "Cancellation aborts transport and emits exactly one cancelled terminal",
+      "body_sha256": "1f222f67ca267f2c45cf954fdafb3b4d5ae96b106da9618033c17b3876b4714c"
+    },
+    {
+      "id": "SWIFT-064",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "immediateCancellationAfterAdmission",
+      "title": "Cancellation immediately after admission cannot be lost before session start",
+      "body_sha256": "9f60ea2dc914fab7446be1b6bff1fa75f0b699b7475fbc5a71ade4131b7042ef"
+    },
+    {
+      "id": "SWIFT-065",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "retryBeforeVisibleOutput",
+      "title": "Retry stays on the same route and occurs only before visible output",
+      "body_sha256": "bb8a4a54ac7c261d5c14f37c523efc7cc3bdb16c888b745ac0ddaca184a9fb99"
+    },
+    {
+      "id": "SWIFT-066",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "retryAfterOpenedTransportFailsBeforeOutput",
+      "title": "A successful HTTP response that fails before output retries without duplicate start",
+      "body_sha256": "8902db804e20cdd0e8c1a42395b51669c5f6c5efab8302c296929576d5ec7763"
+    },
+    {
+      "id": "SWIFT-067",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "malformedProviderJSONClassification",
+      "title": "Malformed provider JSON remains a malformedResponse failure",
+      "body_sha256": "22d7265533d509814a45e6891cbd7a152cb94d335cc550f34b09b117a540421a"
+    },
+    {
+      "id": "SWIFT-068",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "runtimeMailboxOverflow",
+      "title": "Runtime mailbox overflow becomes an explicit terminal failure",
+      "body_sha256": "d4a6600e0ce6032398a98f67f3434ec6312e75dd7ec44c736e96a73123a8a6a4"
+    },
+    {
+      "id": "SWIFT-069",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "transportBackpressureIsTerminal",
+      "title": "Transport backpressure is a terminal failure and is never retried",
+      "body_sha256": "ff3dcc011f4b3bb68d42a09b4bcc796b0df46139e83abf1cf31386eeeb8d96a3"
+    },
+    {
+      "id": "SWIFT-070",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "executeShutdownInterleaving",
+      "title": "Execute and shutdown interleave without losing or duplicating a terminal",
+      "body_sha256": "454702636c6d6d493e1d5763316d55d8ce7027d4d3ccd18659a5e400b7da0f9c"
+    },
+    {
+      "id": "SWIFT-071",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "noRetryAfterVisibleOutput",
+      "title": "Runtime never retries after a text delta is visible",
+      "body_sha256": "90d9bd3b7c9ed242461e7d6a7ef88a12270ba790fab4dcc77e0db94d16d574fe"
+    },
+    {
+      "id": "SWIFT-072",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "noRetryForAuthenticationFailure",
+      "title": "Authentication failures are never retried",
+      "body_sha256": "56a0f0b5b18cee988c432942b3a1081222fe3b42fac7b9ca1730a3c42427a92e"
+    },
+    {
+      "id": "SWIFT-073",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "requestSessionReleaseOrdering",
+      "title": "Completed request IDs are reusable as soon as terminal is observable",
+      "body_sha256": "9aa6bdbc1c8b726eb6f2e892447f6928f89e45ceacc28befcd0c3269517712a1"
+    },
+    {
+      "id": "SWIFT-074",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "registrationSessionReleaseOrdering",
+      "title": "Completed account registration is released before its terminal event",
+      "body_sha256": "c7b3dbbb0dd2d5931b1d066103eb7b6fdfb4c004197559d38c67d524d5cc27d7"
+    },
+    {
+      "id": "SWIFT-075",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "revokeAccount",
+      "title": "Account revoke blocks new work, cancels active work, and removes credential",
+      "body_sha256": "7d88570332ad27f5e6b2eeb739b9ce559834aae8e390fef1f3fecf7f4c30f1fb"
+    },
+    {
+      "id": "SWIFT-076",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "revokeUsesAccountExecutionIndex",
+      "title": "Account revoke cancels only executions selected by the account index",
+      "body_sha256": "bf269ac9b084eebfa050342124088c421568ce30e1486017de9f62e3b84dfdf7"
+    },
+    {
+      "id": "SWIFT-077",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "revokeFailureRestoresAvailability",
+      "title": "Failed credential removal leaves the existing account usable",
+      "body_sha256": "e57c09ae1d31e47911a0f57895ff40ee4ff5f4d9f76383010b59906d7a828b56"
+    },
+    {
+      "id": "SWIFT-078",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "timeout",
+      "title": "Deadline expiry is a timedOut terminal, not a cancellation",
+      "body_sha256": "64855c986f00f24a4e93246c8bd0a4ff4e6bfb85f9fb183d995badb8f3f09042"
+    },
+    {
+      "id": "SWIFT-079",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "strictWireValidation",
+      "title": "Strict wire helpers reject malformed catalogs, token usage, and oversized tool arguments",
+      "body_sha256": "bcdb01f5f86912d54eb448309cba814ab2d6a8f58e684c16463325528a72e461"
+    },
+    {
+      "id": "SWIFT-080",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openAIChatRejectsMalformedWireShapes",
+      "title": "OpenAI-compatible chat rejects malformed optional wire fields instead of dropping them",
+      "body_sha256": "f73fb40df593a132d7393895db8a751a26bce154c542e91c99c312631cf3f904"
+    },
+    {
+      "id": "SWIFT-081",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "openAIChatUsageOnlyChunk",
+      "title": "OpenAI-compatible chat accepts a bounded usage-only terminal chunk",
+      "body_sha256": "90eb31ccfe5d187124c963a359eb4b695c449338d863026fa10d19144517d2af"
+    },
+    {
+      "id": "SWIFT-082",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "unexpectedErrorRedaction",
+      "title": "Unexpected errors are normalized without reflecting descriptions",
+      "body_sha256": "e9c6776bd5333ec2dbe240d47e970420c4cd2e6aff3cd2ab164d37502b735f76"
+    },
+    {
+      "id": "SWIFT-083",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "anthropicContentBlockTypeIsEnforced",
+      "title": "Anthropic deltas are bound to the content block type that opened them",
+      "body_sha256": "7959179ab1feddf02fb7d8f9874b97e54054cb8bc5a8e79a48a3572911c024c6"
+    },
+    {
+      "id": "SWIFT-084",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "deterministicRetryAfterAndUsageOverflow",
+      "title": "Retry-After dates use the injected time and token totals fail on overflow",
+      "body_sha256": "78eb6f535c23679da8d2ae1c1a92755ca0e55d7043f47e00cab64422be7b978e"
+    },
+    {
+      "id": "SWIFT-085",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "geminiTextStepLifecycle",
+      "title": "Gemini text steps preserve their explicit start-delta-stop lifecycle",
+      "body_sha256": "55fee766e07d9e34e4b6098b5f2bcd0c9a6b3f66278baabd6fea8cb443292bc0"
+    },
+    {
+      "id": "SWIFT-086",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "geminiThoughtAndInitialFunctionArguments",
+      "title": "Gemini isolates thoughts and preserves initial function arguments",
+      "body_sha256": "3b4101d5dee551ec65f4fcc0e5644df638bb7c52b05f1482821ff4c2e351a685"
+    },
+    {
+      "id": "SWIFT-087",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "geminiRejectsInvalidStepLifecycle",
+      "title": "Gemini rejects deltas and stops that do not belong to an active step",
+      "body_sha256": "ed6602fdf24edab1bf08feea9930e7bd453678808660576a109face1bb5bbeaf"
+    },
+    {
+      "id": "SWIFT-088",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "semanticProviderFailures",
+      "title": "Provider decoders fail closed on semantically unsuccessful terminal states",
+      "body_sha256": "657edac542cbc6d8f08baec81e6454a7ac0bfa2dd363a9a7b83d1ca2ad6eabab"
+    },
+    {
+      "id": "SWIFT-089",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "terminalWaitsForTransportTermination",
+      "title": "Execution publishes terminal only after transport termination and uses the injected clock",
+      "body_sha256": "7507ba7f45792793a08a83c7088d9bae5f303b276518852c2ab31b84a3283a86"
+    },
+    {
+      "id": "SWIFT-090",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "activationReadBackIsRequired",
+      "title": "Registration rejects a no-op activation and compensates the staged credential",
+      "body_sha256": "099e1470622aee04d71a8223ca39cdc0641a4cfdee5dda3cbb51bdd59b6154bb"
+    },
+    {
+      "id": "SWIFT-091",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "credentialSourceMismatchFailsBeforeTransport",
+      "title": "Runtime rejects a credential lease whose material source disagrees with its record",
+      "body_sha256": "7ba5c3fdb588d18a1315318a392e2b3bf178024ce149cc9337d115a7c6ebb45f"
+    },
+    {
+      "id": "SWIFT-092",
+      "path": "Tests/SEMIProviderRuntimeTests/ProviderRuntimeTests.swift",
+      "function": "shutdownIsAJoiningAdmissionFence",
+      "title": "Concurrent shutdown callers join active work and post-shutdown admission fails closed",
+      "body_sha256": "890589c433fd0060421b4a235b3830d51b9bf825df46fef0a1d1bd14f9e991dd"
+    }
+  ]
+}

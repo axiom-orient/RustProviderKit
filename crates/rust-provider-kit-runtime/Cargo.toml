@@ -1,0 +1,34 @@
+[package]
+name = "rust-provider-kit-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Provider wire adapters and effect runtime for RustProviderKit"
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+http.workspace = true
+httpdate.workspace = true
+parking_lot.workspace = true
+percent-encoding.workspace = true
+reqwest.workspace = true
+rust-provider-kit-core = { path = "../rust-provider-kit-core" }
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
