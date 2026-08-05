@@ -201,8 +201,12 @@ impl ExecutionSession {
                         return Err(failure);
                     }
                 };
-                let failure = http_failure_parts(status, &headers, &body, self.clock.now().await?)
-                    .with_request_id(self.request.id().clone());
+                let context = adapter.failure_context(status);
+                let failure = with_failure_context(
+                    http_failure_parts(status, &headers, &body, self.clock.now().await?),
+                    context.as_deref(),
+                )
+                .with_request_id(self.request.id().clone());
                 if self.retry_before_visible(&failure, attempt).await? {
                     attempt = attempt.checked_add(1).ok_or_else(|| {
                         invariant_failure(&self.request, "provider retry counter overflow")
@@ -591,4 +595,28 @@ fn cancelled_failure(request: &ProviderTurnRequest) -> ProviderFailure {
 fn invariant_failure(request: &ProviderTurnRequest, message: &str) -> ProviderFailure {
     ProviderFailure::new(ProviderFailureCode::InternalInvariant, message)
         .with_request_id(request.id().clone())
+}
+
+fn with_failure_context(failure: ProviderFailure, context: Option<&str>) -> ProviderFailure {
+    let Some(context) = context else {
+        return failure;
+    };
+    let status = failure.provider_status_code();
+    let retry_after = failure.retry_after_milliseconds();
+    let request_id = failure.request_id().cloned();
+    let mut enriched =
+        ProviderFailure::new(failure.code(), format!("{} ({context})", failure.message()));
+    if let Some(status) = status {
+        let Ok(value) = enriched.with_status(status) else {
+            return failure;
+        };
+        enriched = value;
+    }
+    if let Some(retry_after) = retry_after {
+        enriched = enriched.with_retry_after(retry_after);
+    }
+    if let Some(request_id) = request_id {
+        enriched = enriched.with_request_id(request_id);
+    }
+    enriched
 }

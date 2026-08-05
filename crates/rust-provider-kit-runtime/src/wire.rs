@@ -315,7 +315,7 @@ pub(crate) fn http_failure(
 pub(crate) fn http_failure_parts(
     status: u16,
     headers: &BTreeMap<String, String>,
-    body: &[u8],
+    _body: &[u8],
     now: ProviderInstant,
 ) -> ProviderFailure {
     let code = match status {
@@ -330,8 +330,7 @@ pub(crate) fn http_failure_parts(
         500..=599 => ProviderFailureCode::ServerFailed,
         _ => ProviderFailureCode::TransportFailed,
     };
-    let message = provider_error_message(body)
-        .unwrap_or_else(|| format!("provider HTTP request failed with status {status}"));
+    let message = format!("provider HTTP request failed with status {status}");
     let mut failure = match ProviderFailure::new(code, message).with_status(status) {
         Ok(value) => value,
         Err(_) => ProviderFailure::new(
@@ -346,21 +345,6 @@ pub(crate) fn http_failure_parts(
         failure = failure.with_retry_after(value);
     }
     failure
-}
-fn provider_error_message(body: &[u8]) -> Option<String> {
-    let value = ProviderJsonValue::decode(body).ok()?;
-    let candidates = [
-        value.at(&["error", "message"]),
-        value.at(&["message"]),
-        value.at(&["error", "type"]),
-        value.at(&["error"]),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .find_map(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
 }
 fn retry_after_milliseconds(value: &str, now: ProviderInstant) -> Option<u64> {
     if let Ok(seconds) = value.trim().parse::<u64>() {
@@ -395,9 +379,7 @@ pub(crate) fn parse_model_catalog(
         let id = ProviderModelId::new(raw_id)
             .map_err(|_| malformed(format!("model entry {index} has no valid identifier")))?;
         if !seen.insert(id.clone()) {
-            return Err(malformed(format!(
-                "model catalog contains duplicate identifier {raw_id}"
-            )));
+            return Err(malformed("model catalog contains duplicate identifiers"));
         }
 
         let display_name =

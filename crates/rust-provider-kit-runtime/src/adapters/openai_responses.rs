@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use http::Method;
@@ -15,7 +14,7 @@ use rust_provider_kit_core::{
 use serde_json::{Map, Value, json};
 
 use crate::adapter::{ProviderAdapter, ProviderStreamDecoder};
-use crate::codex_version::{CodexClientVersion, is_qualified_executable};
+use crate::codex_version::{CODEX_CLIENT_VERSION_OVERRIDE, codex_client_version};
 use crate::http_transport::{ProviderHttpRequest, ProviderHttpTransport};
 use crate::registry::ProviderEndpointCatalog;
 use crate::secure_file::SecureRegularFileReader;
@@ -38,9 +37,20 @@ pub(crate) enum OpenAiResponsesKind {
 pub(crate) struct OpenAiResponsesAdapter {
     kind: OpenAiResponsesKind,
     descriptor: ProviderDescriptor,
-    version_resolver: CodexClientVersion,
+    /// Explicitly configured Codex client version, if the caller set one.
+    client_version: Option<String>,
 }
+#[allow(clippy::unused_self)]
 impl OpenAiResponsesAdapter {
+    /// Build the Codex adapter with the client version this process declares.
+    pub(crate) fn codex(client_version: Option<String>) -> Result<Self, ProviderFailure> {
+        if let Some(value) = client_version.as_deref() {
+            crate::codex_version::validate_client_version(value)?;
+        }
+        let mut adapter = Self::new(OpenAiResponsesKind::Codex)?;
+        adapter.client_version = client_version;
+        Ok(adapter)
+    }
     pub(crate) fn new(kind: OpenAiResponsesKind) -> Result<Self, ProviderFailure> {
         let descriptor = match kind {
             OpenAiResponsesKind::Codex => ProviderDescriptor::new(
@@ -64,7 +74,7 @@ impl OpenAiResponsesAdapter {
         Ok(Self {
             kind,
             descriptor,
-            version_resolver: CodexClientVersion::default(),
+            client_version: None,
         })
     }
     fn capabilities(&self) -> rust_provider_kit_core::ProviderCapabilities {
@@ -328,18 +338,7 @@ impl OpenAiResponsesAdapter {
                 "Codex auth.json access token is invalid",
             )
         })?;
-        let executable = tokio::task::spawn_blocking(discover_codex_executable)
-            .await
-            .map_err(|_| {
-                ProviderFailure::new(
-                    ProviderFailureCode::InternalInvariant,
-                    "Codex executable discovery terminated unexpectedly",
-                )
-            })?;
-        let client_version = self
-            .version_resolver
-            .resolve(path, executable.as_deref())
-            .await?;
+        let client_version = codex_client_version(self.client_version.as_deref())?;
         Ok(CodexResolvedCredential {
             access_token,
             account_id: account_id.to_owned(),
@@ -414,17 +413,6 @@ struct CodexResolvedCredential {
     account_id: String,
     client_version: String,
 }
-fn discover_codex_executable() -> Option<PathBuf> {
-    if let Some(value) = std::env::var_os("ARA_PROVIDER_KIT_CODEX_EXECUTABLE") {
-        let path = PathBuf::from(value);
-        return is_qualified_executable(&path).then_some(path);
-    }
-    let search_path = std::env::var_os("PATH")?;
-    std::env::split_paths(&search_path)
-        .filter(|directory| !directory.as_os_str().is_empty())
-        .map(|directory| directory.join("codex"))
-        .find(|path| is_qualified_executable(path))
-}
 
 #[async_trait]
 impl ProviderAdapter for OpenAiResponsesAdapter {
@@ -458,6 +446,20 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
             &self.encode_request(request)?,
             request.constraints(),
         )
+    }
+    /// Name the declared client version when the endpoint refuses the request.
+    ///
+    /// The Codex endpoint enforces a minimum client version and can reject an
+    /// older one with a bare 400. This context states the value declared by
+    /// this route without claiming that every 4xx has that cause.
+    fn failure_context(&self, status: u16) -> Option<String> {
+        if self.kind != OpenAiResponsesKind::Codex || !(400..500).contains(&status) {
+            return None;
+        }
+        let declared = codex_client_version(self.client_version.as_deref()).ok()?;
+        Some(format!(
+            "declared codex client version {declared}; if this endpoint now requires a newer client, configure a newer client version or set {CODEX_CLIENT_VERSION_OVERRIDE}"
+        ))
     }
     fn make_decoder(
         &self,
@@ -497,7 +499,6 @@ impl ProviderAdapter for OpenAiResponsesAdapter {
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             60_000,
             8 * 1_024 * 1_024,
             1,
@@ -589,14 +590,15 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
                 .filter(|value| !value.is_empty())
                 .map(|value| vec![ProviderDecodedEvent::Text(value.to_owned())])
                 .unwrap_or_default()),
-            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
-                Ok(root
-                    .get("delta")
-                    .and_then(ProviderJsonValue::as_str)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| vec![ProviderDecodedEvent::Reasoning(value.to_owned())])
-                    .unwrap_or_default())
-            }
+            // The reasoning text delta is provider-private chain-of-thought,
+            // not the displayable summary contract exposed by ProviderKit.
+            Some("response.reasoning_text.delta") => Ok(Vec::new()),
+            Some("response.reasoning_summary_text.delta") => Ok(root
+                .get("delta")
+                .and_then(ProviderJsonValue::as_str)
+                .filter(|value| !value.is_empty())
+                .map(|value| vec![ProviderDecodedEvent::Reasoning(value.to_owned())])
+                .unwrap_or_default()),
             Some("response.output_item.added") => {
                 if root
                     .at(&["item", "type"])
@@ -743,17 +745,10 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
                     },
                 )])
             }
-            Some("response.failed" | "error") => {
-                let message = root
-                    .at(&["response", "error", "message"])
-                    .or_else(|| root.at(&["error", "message"]))
-                    .and_then(ProviderJsonValue::as_str)
-                    .unwrap_or("provider stream failed");
-                Err(ProviderFailure::new(
-                    ProviderFailureCode::ServerFailed,
-                    message,
-                ))
-            }
+            Some("response.failed" | "error") => Err(ProviderFailure::new(
+                ProviderFailureCode::ServerFailed,
+                "provider stream failed",
+            )),
             Some("response.incomplete") => Err(ProviderFailure::new(
                 ProviderFailureCode::ServerFailed,
                 "provider response was incomplete",

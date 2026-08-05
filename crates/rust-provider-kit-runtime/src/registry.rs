@@ -11,6 +11,7 @@ use crate::adapters::{
     AnthropicMessagesAdapter, AnthropicMessagesKind, GeminiGenerateContentAdapter,
     OpenAiChatAdapter, OpenAiChatKind, OpenAiResponsesAdapter, OpenAiResponsesKind,
 };
+use crate::runtime::ProviderRuntimeOptions;
 
 #[derive(Clone)]
 pub(crate) struct BuiltInProviderRegistry {
@@ -26,9 +27,11 @@ impl std::fmt::Debug for BuiltInProviderRegistry {
 }
 
 impl BuiltInProviderRegistry {
-    pub(crate) fn new() -> Result<Self, ProviderFailure> {
+    pub(crate) fn new(options: &ProviderRuntimeOptions) -> Result<Self, ProviderFailure> {
         let values: Vec<Arc<dyn ProviderAdapter>> = vec![
-            Arc::new(OpenAiResponsesAdapter::new(OpenAiResponsesKind::Codex)?),
+            Arc::new(OpenAiResponsesAdapter::codex(
+                options.codex_client_version.clone(),
+            )?),
             Arc::new(OpenAiResponsesAdapter::new(OpenAiResponsesKind::OpenAi)?),
             Arc::new(AnthropicMessagesAdapter::new(
                 AnthropicMessagesKind::Anthropic,

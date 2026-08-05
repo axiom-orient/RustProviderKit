@@ -880,7 +880,6 @@ pub struct ProviderRequestConstraints {
     data_collection: ProviderDataCollectionPolicy,
     requires_zero_data_retention: bool,
     requires_parameter_support: bool,
-    allows_provider_endpoint_fallbacks: bool,
     timeout_milliseconds: u64,
     maximum_response_bytes: usize,
     maximum_retry_attempts: usize,
@@ -892,14 +891,12 @@ impl ProviderRequestConstraints {
         data_collection: ProviderDataCollectionPolicy,
         requires_zero_data_retention: bool,
         requires_parameter_support: bool,
-        allows_provider_endpoint_fallbacks: bool,
         timeout_milliseconds: u64,
         maximum_response_bytes: usize,
         maximum_retry_attempts: usize,
         maximum_output_tokens: Option<usize>,
     ) -> Result<Self, ProviderCoreError> {
-        if allows_provider_endpoint_fallbacks
-            || !(1_000..=3_600_000).contains(&timeout_milliseconds)
+        if !(1_000..=3_600_000).contains(&timeout_milliseconds)
             || !(1_024..=64 * 1_024 * 1_024).contains(&maximum_response_bytes)
             || !(1..=3).contains(&maximum_retry_attempts)
             || maximum_output_tokens.is_some_and(|value| !(1..=1_000_000).contains(&value))
@@ -912,7 +909,6 @@ impl ProviderRequestConstraints {
             data_collection,
             requires_zero_data_retention,
             requires_parameter_support,
-            allows_provider_endpoint_fallbacks,
             timeout_milliseconds,
             maximum_response_bytes,
             maximum_retry_attempts,
@@ -930,10 +926,6 @@ impl ProviderRequestConstraints {
     #[must_use]
     pub fn requires_parameter_support(&self) -> bool {
         self.requires_parameter_support
-    }
-    #[must_use]
-    pub fn allows_provider_endpoint_fallbacks(&self) -> bool {
-        self.allows_provider_endpoint_fallbacks
     }
     #[must_use]
     pub fn timeout_milliseconds(&self) -> u64 {
@@ -958,7 +950,6 @@ impl Default for ProviderRequestConstraints {
             data_collection: ProviderDataCollectionPolicy::Deny,
             requires_zero_data_retention: true,
             requires_parameter_support: true,
-            allows_provider_endpoint_fallbacks: false,
             timeout_milliseconds: 300_000,
             maximum_response_bytes: 16 * 1_024 * 1_024,
             maximum_retry_attempts: 1,
@@ -967,11 +958,11 @@ impl Default for ProviderRequestConstraints {
     }
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderRequestConstraintsRaw {
     data_collection: ProviderDataCollectionPolicy,
     requires_zero_data_retention: bool,
     requires_parameter_support: bool,
-    allows_provider_endpoint_fallbacks: bool,
     timeout_milliseconds: u64,
     maximum_response_bytes: usize,
     maximum_retry_attempts: usize,
@@ -987,7 +978,6 @@ impl<'de> Deserialize<'de> for ProviderRequestConstraints {
             raw.data_collection,
             raw.requires_zero_data_retention,
             raw.requires_parameter_support,
-            raw.allows_provider_endpoint_fallbacks,
             raw.timeout_milliseconds,
             raw.maximum_response_bytes,
             raw.maximum_retry_attempts,

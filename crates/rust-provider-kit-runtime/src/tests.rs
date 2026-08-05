@@ -22,7 +22,7 @@ use crate::http_transport::{
 use crate::in_memory_credential_store::InMemoryProviderCredentialStore;
 use crate::openrouter_oauth::OpenRouterOAuthRegistrationRequest;
 use crate::registry::BuiltInProviderRegistry;
-use crate::runtime::ProviderRuntime;
+use crate::runtime::{ProviderRuntime, ProviderRuntimeOptions};
 use crate::secure_file::SecureRegularFileReader;
 use crate::sse::{ServerSentEvent, ServerSentEventDecoder};
 use crate::wire::{
@@ -83,7 +83,6 @@ fn request_for_reasoning_and_tool_choice(
             ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             30_000,
             2 * 1_024 * 1_024,
             2,
@@ -184,7 +183,7 @@ impl ProviderHttpTransport for CapturingUnaryTransport {
 
 #[test]
 fn registry_exposes_exact_supported_set_and_rejects_unknown() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let actual = registry
         .descriptors()
         .into_iter()
@@ -208,6 +207,23 @@ fn registry_exposes_exact_supported_set_and_rejects_unknown() -> Result<(), Box<
         .find(|descriptor| descriptor.id() == &BuiltInProviderId::codex())
         .ok_or("Codex descriptor is missing")?;
     assert_eq!(codex.display_name(), "Codex (ChatGPT subscription)");
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_an_invalid_configured_codex_version_during_construction()
+-> Result<(), Box<dyn Error>> {
+    let failure = ProviderRuntime::with_components(
+        Arc::new(InMemoryProviderCredentialStore::default()),
+        Arc::new(CapturingUnaryTransport::default()),
+        Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions {
+            codex_client_version: Some("not a version".to_owned()),
+        },
+    )
+    .err()
+    .ok_or("invalid Codex client version was accepted during construction")?;
+    assert_eq!(failure.code(), ProviderFailureCode::InvalidRequest);
     Ok(())
 }
 
@@ -260,10 +276,6 @@ async fn codex_omits_empty_instructions_and_uses_caller_owned_history() -> Resul
     fs::write(
         &auth_path,
         r#"{"tokens":{"access_token":"token","account_id":"account"}}"#,
-    )?;
-    fs::write(
-        directory.path().join("version.json"),
-        r#"{"latest_version":"1.2.3"}"#,
     )?;
     let account_id = ProviderAccountId::new("codex-history-account")?;
     let material = ProviderCredentialMaterial::external_auth_file(&auth_path)?;
@@ -450,7 +462,7 @@ async fn account_integration_headers_reach_the_provider_wire() -> Result<(), Box
         ]),
     )?;
     let lease = active_lease(BuiltInProviderId::open_router(), Some(endpoint))?;
-    let wire = BuiltInProviderRegistry::new()?
+    let wire = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?
         .adapter(request.selection().provider_id())?
         .make_execution_request(&request, &lease)
         .await?;
@@ -551,6 +563,7 @@ async fn reconciliation_fences_new_registration_admission() -> Result<(), Box<dy
         vault.clone(),
         Arc::new(CapturingUnaryTransport::default()),
         Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
     )?;
     let reconcile_runtime = runtime.clone();
     let reconciliation =
@@ -610,6 +623,7 @@ async fn in_flight_oauth_registration_fences_reconciliation() -> Result<(), Box<
         Arc::new(InMemoryProviderCredentialStore::default()),
         Arc::new(CapturingUnaryTransport::default()),
         Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
     )?;
     let pkce = ProviderPkce::new(
         SensitiveValue::new("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")?,
@@ -732,6 +746,7 @@ async fn revoke_cancels_only_executions_for_the_selected_account() -> Result<(),
         vault.clone(),
         transport.clone(),
         Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
     )?;
     let open_router_request = request_for_account(
         BuiltInProviderId::open_router(),
@@ -824,6 +839,7 @@ async fn revoke_waits_for_in_flight_inspection_before_removing_credentials()
             release: Arc::clone(&release),
         }),
         Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
     )?;
     let inspect_runtime = runtime.clone();
     let inspected_account = account_id.clone();
@@ -852,7 +868,7 @@ async fn revoke_waits_for_in_flight_inspection_before_removing_credentials()
 #[tokio::test]
 async fn openrouter_request_preserves_policy_tool_choice_and_output_limit()
 -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let provider_id = BuiltInProviderId::open_router();
     let adapter = registry.adapter(&provider_id)?;
     let request = request_for(provider_id.clone())?;
@@ -950,7 +966,8 @@ async fn openai_compatible_reasoning_state_replays_only_as_opaque_wire_history()
         None,
         ProviderRequestConstraints::default(),
     )?;
-    let adapter = BuiltInProviderRegistry::new()?.adapter(&provider_id)?;
+    let adapter =
+        BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?.adapter(&provider_id)?;
     let wire = adapter
         .make_execution_request(&request, &active_lease(provider_id, None)?)
         .await?;
@@ -993,7 +1010,7 @@ async fn native_state_is_rejected_outside_its_exact_provider_model_route()
             r#"{"provider":"openrouter","model":"model-test","field":"reasoning_content","content":"private"}"#,
         ),
     ];
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     for (index, (provider_id, format, payload)) in cases.into_iter().enumerate() {
         let request = ProviderTurnRequest::new(
             ProviderRequestId::new(format!("native-route-rejection-{index}"))?,
@@ -1035,7 +1052,7 @@ async fn native_state_is_rejected_outside_its_exact_provider_model_route()
 #[tokio::test]
 async fn application_validated_chat_instruction_precedes_user_messages()
 -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let provider_id = BuiltInProviderId::deep_seek();
     let adapter = registry.adapter(&provider_id)?;
     let request = request_for_reasoning_and_tool_choice(
@@ -1071,7 +1088,7 @@ async fn application_validated_chat_instruction_precedes_user_messages()
 #[tokio::test]
 async fn qwen_uses_portal_by_default_and_allows_an_explicit_regional_endpoint()
 -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let provider_id = BuiltInProviderId::qwen();
     let adapter = registry.adapter(&provider_id)?;
     let request = request_for_reasoning(provider_id.clone(), ProviderReasoningPolicy::Automatic)?;
@@ -1095,7 +1112,7 @@ async fn qwen_uses_portal_by_default_and_allows_an_explicit_regional_endpoint()
 
 #[tokio::test]
 async fn gemini_uses_generate_content_wire_contract() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let provider_id = BuiltInProviderId::gemini();
     let adapter = registry.adapter(&provider_id)?;
     let request = request_for(provider_id.clone())?;
@@ -1135,7 +1152,7 @@ async fn gemini_uses_generate_content_wire_contract() -> Result<(), Box<dyn Erro
 
 #[tokio::test]
 async fn deepseek_kimi_and_zai_use_gajae_aligned_dialects() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
 
     let deepseek_id = BuiltInProviderId::deep_seek();
     let deepseek_request = request_for_reasoning_and_tool_choice(
@@ -1213,7 +1230,7 @@ async fn deepseek_kimi_and_zai_use_gajae_aligned_dialects() -> Result<(), Box<dy
 
 #[tokio::test]
 async fn minimax_uses_distinct_execution_and_model_catalog_bases() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let provider_id = BuiltInProviderId::mini_max();
     let adapter = registry.adapter(&provider_id)?;
     let request = request_for_reasoning(provider_id.clone(), ProviderReasoningPolicy::Automatic)?;
@@ -1253,7 +1270,7 @@ async fn minimax_uses_distinct_execution_and_model_catalog_bases() -> Result<(),
 
 #[test]
 fn openai_chat_decoder_normalizes_text_usage_and_completion() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::open_router())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1286,7 +1303,7 @@ fn openai_chat_decoder_normalizes_text_usage_and_completion() -> Result<(), Box<
 
 #[test]
 fn openai_chat_decoder_fails_closed_on_malformed_optional_fields() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::open_router())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1303,7 +1320,7 @@ fn openai_chat_decoder_fails_closed_on_malformed_optional_fields() -> Result<(),
 
 #[test]
 fn openai_responses_decoder_emits_text_tool_and_completion() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::open_ai())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1327,6 +1344,11 @@ fn openai_responses_decoder_emits_text_tool_and_completion() -> Result<(), Box<d
     assert!(
         matches!(reasoning.as_slice(), [ProviderDecodedEvent::Reasoning(value)] if value == "plan")
     );
+    let private_reasoning = decoder.consume(&event(
+        Some("response.reasoning_text.delta"),
+        r#"{"type":"response.reasoning_text.delta","delta":"private"}"#,
+    ))?;
+    assert!(private_reasoning.is_empty());
     assert!(decoder.consume(&event(Some("response.output_item.added"), r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"call-1","call_id":"call-1","name":"lookup"}}"#))?.is_empty());
     let tool = decoder.consume(&event(Some("response.function_call_arguments.done"), r#"{"type":"response.function_call_arguments.done","item_id":"call-1","output_index":0,"arguments":"{\"answer\":\"ok\"}"}"#))?;
     assert!(
@@ -1342,7 +1364,7 @@ fn openai_responses_decoder_emits_text_tool_and_completion() -> Result<(), Box<d
 
 #[test]
 fn anthropic_decoder_binds_delta_to_opened_content_block_type() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::anthropic())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1371,7 +1393,7 @@ fn anthropic_decoder_binds_delta_to_opened_content_block_type() -> Result<(), Bo
 #[test]
 fn gemini_decoder_normalizes_generate_content_text_usage_and_completion()
 -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::gemini())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1398,7 +1420,7 @@ fn gemini_decoder_normalizes_generate_content_text_usage_and_completion()
 
 #[test]
 fn openai_chat_usage_only_terminal_chunk_preserves_usage() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::open_router())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1441,7 +1463,7 @@ fn retry_after_date_and_usage_overflow_are_deterministic() -> Result<(), Box<dyn
     );
     assert_eq!(failure.retry_after_milliseconds(), Some(1_000));
 
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::anthropic())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1464,7 +1486,7 @@ fn retry_after_date_and_usage_overflow_are_deterministic() -> Result<(), Box<dyn
 #[test]
 fn gemini_isolates_thoughts_and_generates_missing_function_call_ids() -> Result<(), Box<dyn Error>>
 {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::gemini())?;
     let adapter = registry.adapter(request.selection().provider_id())?;
     let mut decoder = adapter.make_decoder(&request)?;
@@ -1493,7 +1515,7 @@ fn gemini_isolates_thoughts_and_generates_missing_function_call_ids() -> Result<
 
 #[test]
 fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(), Box<dyn Error>> {
-    let registry = BuiltInProviderRegistry::new()?;
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
 
     let request = request_for(BuiltInProviderId::open_router())?;
     let mut chat = registry
@@ -1512,6 +1534,21 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
         .ok_or("chat truncation was accepted")?;
     assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
 
+    let request = request_for(BuiltInProviderId::open_router())?;
+    let mut chat_error = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = chat_error
+        .consume(&event(
+            None,
+            r#"{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}"#,
+        ))
+        .err()
+        .ok_or("chat stream failure was accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
+    assert_eq!(failure.message(), "provider stream failed");
+    assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+
     let request = request_for(BuiltInProviderId::open_ai())?;
     let mut responses = registry
         .adapter(request.selection().provider_id())?
@@ -1519,11 +1556,28 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
     let failure = responses
         .consume(&event(
             Some("response.failed"),
-            r#"{"type":"response.failed","response":{"error":{"message":"failed"}}}"#,
+            r#"{"type":"response.failed","response":{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}}"#,
         ))
         .err()
         .ok_or("Responses failure was accepted")?;
     assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
+    assert_eq!(failure.message(), "provider stream failed");
+    assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+
+    let request = request_for(BuiltInProviderId::anthropic())?;
+    let mut messages_error = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = messages_error
+        .consume(&event(
+            Some("error"),
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}"#,
+        ))
+        .err()
+        .ok_or("Messages stream failure was accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
+    assert_eq!(failure.message(), "Messages stream failed");
+    assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
 
     let request = request_for(BuiltInProviderId::anthropic())?;
     let mut messages = registry
@@ -1563,6 +1617,84 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
         failure.message(),
         "Gemini blocked the response with finish reason SAFETY"
     );
+
+    let request = request_for(BuiltInProviderId::gemini())?;
+    let mut gemini_error = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = gemini_error
+        .consume(&event(
+            None,
+            r#"{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}"#,
+        ))
+        .err()
+        .ok_or("Gemini stream failure was accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
+    assert_eq!(failure.message(), "Gemini stream failed");
+    assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+    Ok(())
+}
+
+#[test]
+fn provider_decoder_failures_redact_unrecognized_termination_values() -> Result<(), Box<dyn Error>>
+{
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+
+    let request = request_for(BuiltInProviderId::anthropic())?;
+    let mut messages = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    assert!(messages.consume(&event(
+        Some("message_start"),
+        r#"{"type":"message_start","message":{"id":"m-marker","usage":{"input_tokens":1}}}"#,
+    ))?.is_empty());
+    assert!(
+        messages
+            .consume(&event(
+                Some("message_delta"),
+                r#"{"type":"message_delta","delta":{"stop_reason":"marker-secret"}}"#,
+            ))?
+            .is_empty()
+    );
+    let failure = messages
+        .consume(&event(Some("message_stop"), r#"{"type":"message_stop"}"#))
+        .err()
+        .ok_or("Anthropic accepted an unsupported stop reason")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    assert!(!failure.message().contains("marker-secret"));
+
+    let request = request_for(BuiltInProviderId::open_router())?;
+    let mut chat = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    assert!(
+        chat.consume(&event(
+            None,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"marker-secret"}]}"#,
+        ))?
+        .is_empty()
+    );
+    let failure = chat
+        .consume(&event(None, "[DONE]"))
+        .err()
+        .ok_or("OpenAI chat accepted an unsupported finish reason")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    assert!(!failure.message().contains("marker-secret"));
+
+    let request = request_for(BuiltInProviderId::gemini())?;
+    let mut gemini = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = gemini
+        .consume(&event(
+            None,
+            r#"{"candidates":[{"finishReason":"marker-secret"}]}"#,
+        ))
+        .err()
+        .ok_or("Gemini accepted an unsupported finish reason")?;
+    assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
+    assert!(!failure.message().contains("marker-secret"));
+
     Ok(())
 }
 
@@ -1589,17 +1721,18 @@ fn tool_argument_accumulator_is_bounded_and_requires_an_object() -> Result<(), B
 fn strict_model_catalog_validation_rejects_duplicates_and_invalid_limits()
 -> Result<(), Box<dyn Error>> {
     let capabilities = ProviderCapabilities::default();
-    let duplicate = br#"{"data":[{"id":"m1"},{"id":"m1"}]}"#;
-    assert!(
-        parse_model_catalog(
-            duplicate,
-            &[&["data"]],
-            &["id"],
-            &capabilities,
-            ProviderInstant::from_unix_milliseconds(1),
-        )
-        .is_err()
-    );
+    let duplicate = br#"{"data":[{"id":"marker-secret"},{"id":"marker-secret"}]}"#;
+    let failure = parse_model_catalog(
+        duplicate,
+        &[&["data"]],
+        &["id"],
+        &capabilities,
+        ProviderInstant::from_unix_milliseconds(1),
+    )
+    .err()
+    .ok_or("duplicate model identifiers were accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    assert!(!failure.message().contains("marker-secret"));
     let invalid = br#"{"data":[{"id":"m1","context_length":0}]}"#;
     assert!(
         parse_model_catalog(
@@ -1655,13 +1788,16 @@ fn http_failures_are_typed_redacted_and_use_injected_time() -> Result<(), Box<dy
     let failure = http_failure_parts(
         429,
         &headers,
-        br#"{"error":{"message":"Bearer abcdef api_key=secret"}}"#,
+        br#"{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}"#,
         ProviderInstant::from_unix_milliseconds(1_000),
     );
     assert_eq!(failure.code(), ProviderFailureCode::RateLimited);
+    assert_eq!(
+        failure.message(),
+        "provider HTTP request failed with status 429"
+    );
     assert_eq!(failure.retry_after_milliseconds(), Some(2_000));
-    assert!(!failure.message().contains("abcdef"));
-    assert!(!failure.message().contains("secret"));
+    assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
     Ok(())
 }
 

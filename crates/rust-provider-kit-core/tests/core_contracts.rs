@@ -39,7 +39,6 @@ fn turn_request() -> Result<ProviderTurnRequest, ProviderCoreError> {
             ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             30_000,
             2 * 1_024 * 1_024,
             2,
@@ -115,6 +114,14 @@ fn json_is_deterministic_and_bounded() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn json_to_serde_preserves_integral_number_shape() -> Result<(), Box<dyn Error>> {
+    let value = json_object([("count", ProviderJsonValue::from(4_096_i64))]);
+    let converted = serde_json::Value::try_from(value)?;
+    assert_eq!(converted, serde_json::json!({"count": 4_096}));
+    Ok(())
+}
+
+#[test]
 fn tool_history_preserves_call_identity_and_error_status() -> Result<(), Box<dyn Error>> {
     let call = ProviderToolCall::new(
         "call-1",
@@ -184,7 +191,8 @@ fn turn_request_round_trips_every_policy() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn request_rejects_cross_account_continuation_and_fallback() -> Result<(), Box<dyn Error>> {
+fn request_rejects_cross_account_continuation_and_invalid_constraints() -> Result<(), Box<dyn Error>>
+{
     let selection = selection()?;
     let continuation = ProviderContinuation::new(
         selection.provider_id().clone(),
@@ -208,8 +216,7 @@ fn request_rejects_cross_account_continuation_and_fallback() -> Result<(), Box<d
             ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            true,
-            30_000,
+            999,
             1_024,
             1,
             None,
@@ -221,9 +228,15 @@ fn request_rejects_cross_account_continuation_and_fallback() -> Result<(), Box<d
 
 #[test]
 fn codable_input_cannot_bypass_invariants() {
-    let invalid = br#"{"id":"request-1","selection":{"provider_id":"openai","account_id":"account-main","model_id":"gpt-test"},"messages":[],"tools":[],"tool_choice":{"type":"automatic"},"output":{"type":"text"},"reasoning":{"type":"automatic"},"continuation":null,"constraints":{"data_collection":"deny","requires_zero_data_retention":true,"requires_parameter_support":true,"allows_provider_endpoint_fallbacks":false,"timeout_milliseconds":30000,"maximum_response_bytes":1024,"maximum_retry_attempts":1,"maximum_output_tokens":null}}"#;
+    let invalid = br#"{"id":"request-1","selection":{"provider_id":"openai","account_id":"account-main","model_id":"gpt-test"},"messages":[],"tools":[],"tool_choice":{"type":"automatic"},"output":{"type":"text"},"reasoning":{"type":"automatic"},"continuation":null,"constraints":{"data_collection":"deny","requires_zero_data_retention":true,"requires_parameter_support":true,"timeout_milliseconds":30000,"maximum_response_bytes":1024,"maximum_retry_attempts":1,"maximum_output_tokens":null}}"#;
     let decoded = serde_json::from_slice::<ProviderTurnRequest>(invalid);
     assert!(decoded.is_err());
+}
+
+#[test]
+fn removed_endpoint_fallback_field_is_rejected() {
+    let removed_field = br#"{"data_collection":"deny","requires_zero_data_retention":true,"requires_parameter_support":true,"allows_provider_endpoint_fallbacks":false,"timeout_milliseconds":30000,"maximum_response_bytes":1024,"maximum_retry_attempts":1,"maximum_output_tokens":null}"#;
+    assert!(serde_json::from_slice::<ProviderRequestConstraints>(removed_field).is_err());
 }
 
 #[test]

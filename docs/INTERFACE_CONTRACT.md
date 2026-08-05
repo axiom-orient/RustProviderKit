@@ -6,7 +6,8 @@
 
 | Method | 관찰 가능한 계약 |
 |---|---|
-| `new` | caller-owned credential vault를 받아 built-in registry, HTTP transport와 system clock을 구성한다. secret의 durable ownership은 가져오지 않는다. |
+| `new` | caller-owned credential vault를 받아 기본 `ProviderRuntimeOptions`와 built-in registry, HTTP transport, system clock을 구성한다. secret의 durable ownership은 가져오지 않는다. |
+| `with_options` | 명시적 `ProviderRuntimeOptions`로 runtime을 구성한다. Codex의 명시적 client version은 구성 시 검증되며, `explicit config > ARA_PROVIDER_KIT_CODEX_CLIENT_VERSION > built-in` 순서를 따른다. |
 | `providers` | built-in 10 Provider를 deterministic order로 반환한다. |
 | `accounts` | validated account summary를 deterministic order로 반환한다. |
 | `reconcile_credentials` | staged record를 제거하고 실패는 recovery issue로 공개한다. registration/revoke와 상호 배타적인 admission fence다. |
@@ -40,7 +41,7 @@
 - JSON request는 default `Accept: application/json`, body가 있는 adapter는 `Content-Type: application/json`을 가진다.
 - execution timeout은 typed HTTP request와 reqwest까지 전달한다.
 - loopback callback은 exact `127.0.0.1:port/path`, Host, state, percent encoding을 검증한다.
-- Codex auth/version file은 regular non-symlink·bounded read만 허용하며 blocking filesystem probe는 async executor 밖에서 수행한다.
+- Codex auth reference만 regular non-symlink·bounded read로 읽는다. client version은 explicit config, 환경 override, built-in constant로 결정하며 Codex executable·`PATH`·process probe는 수행하지 않는다.
 
 ## Output와 순서
 
@@ -75,7 +76,9 @@ Started
 | Kimi | Chat Completions | `https://api.kimi.com/coding/v1/chat/completions` |
 | Z.AI | Messages | `https://api.z.ai/api/anthropic/v1/messages` |
 
-Provider endpoint fallback은 request policy와 adapter qualification이 허용할 때만 가능하며 cross-provider fallback은 없다.
+Provider endpoint fallback은 지원하지 않는다. OpenRouter 요청도 fallback을
+명시적으로 `false`로 고정하며, 공개 request policy에는 이를 바꾸는 필드가
+없다. cross-provider fallback과 migration/compatibility path도 없다.
 
 ## Error
 
@@ -83,6 +86,7 @@ Provider endpoint fallback은 request policy와 adapter qualification이 허용�
 
 - reqwest timeout은 `TimedOut`으로 분류한다.
 - provider error body와 OAuth secret은 redacted message로 정규화한다.
+- Codex route의 4xx에는 선언된 client version에 관한 중립적 context만 추가하며, 다른 4xx 원인을 단정하지 않는다.
 - malformed optional wire field를 누락으로 보정하지 않는다.
 - worker panic/abort와 producer 소멸은 영구 대기 대신 explicit terminal 또는 completion으로 수렴한다.
 - credential mutation fence 충돌은 조용히 대기하거나 경쟁하지 않고 typed `InvalidRequest`/`AccountUnavailable`로 공개한다.

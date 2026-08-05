@@ -12,60 +12,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-provider-kit-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "parking_lot",
- "regex",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "rust-provider-kit-platform"
-version = "0.1.0"
-dependencies = [
- "rust-provider-kit-core",
- "async-trait",
- "base64",
- "getrandom 0.3.4",
- "parking_lot",
- "sha2",
- "tokio",
- "tokio-util",
- "url",
-]
-
-[[package]]
-name = "rust-provider-kit-runtime"
-version = "0.1.0"
-dependencies = [
- "rust-provider-kit-core",
- "async-trait",
- "bytes",
- "futures-core",
- "futures-util",
- "http",
- "httpdate",
- "parking_lot",
- "percent-encoding",
- "reqwest",
- "serde_json",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "tokio-util",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -897,6 +843,60 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust-provider-kit-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "rust-provider-kit-platform"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "getrandom 0.3.4",
+ "parking_lot",
+ "rust-provider-kit-core",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "rust-provider-kit-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "httpdate",
+ "parking_lot",
+ "percent-encoding",
+ "reqwest",
+ "rust-provider-kit-core",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
 ]
 
 [[package]]

@@ -5,7 +5,7 @@ use rust_provider_kit_core::{
     ProviderAccountId, ProviderCredentialStore, ProviderFailure, ProviderPkce, SensitiveValue,
 };
 use rust_provider_kit_runtime::{
-    InMemoryProviderCredentialStore, OpenRouterOAuthRegistrationRequest, ProviderRuntime,
+    OpenRouterOAuthRegistrationRequest, ProviderRuntime, ProviderRuntimeOptions,
 };
 use url::Url;
 
@@ -14,13 +14,16 @@ fn assert_send_sync<T: Send + Sync>() {}
 #[test]
 fn public_facade_is_send_sync() {
     assert_send_sync::<ProviderRuntime>();
+    assert_send_sync::<ProviderRuntimeOptions>();
     assert_send_sync::<OpenRouterOAuthRegistrationRequest>();
-    assert_send_sync::<InMemoryProviderCredentialStore>();
-    let _ephemeral_store = InMemoryProviderCredentialStore::default();
 
     let _constructor: fn(
         Arc<dyn ProviderCredentialStore>,
     ) -> Result<ProviderRuntime, ProviderFailure> = ProviderRuntime::new;
+    let _configured_constructor: fn(
+        Arc<dyn ProviderCredentialStore>,
+        ProviderRuntimeOptions,
+    ) -> Result<ProviderRuntime, ProviderFailure> = ProviderRuntime::with_options;
 }
 
 #[test]

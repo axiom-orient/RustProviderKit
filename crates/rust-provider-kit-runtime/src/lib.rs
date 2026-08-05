@@ -13,6 +13,7 @@ mod credential_contract;
 mod execution_session;
 mod execution_supervisor;
 mod http_transport;
+#[cfg(test)]
 mod in_memory_credential_store;
 mod oauth_replay;
 mod openrouter_oauth;
@@ -24,9 +25,8 @@ mod secure_file;
 mod sse;
 mod wire;
 
-pub use in_memory_credential_store::InMemoryProviderCredentialStore;
 pub use openrouter_oauth::OpenRouterOAuthRegistrationRequest;
-pub use runtime::ProviderRuntime;
+pub use runtime::{ProviderRuntime, ProviderRuntimeOptions};
 
 #[cfg(test)]
 mod tests;

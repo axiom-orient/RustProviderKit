@@ -95,7 +95,7 @@ Credential reconciliation과 registration은 양방향 admission fence다. OAuth
 - `wire.rs`: JSON conversion, model catalog, usage, HTTP failure normalization
 - `adapters/*`: 실제 Provider dialect 차이
 
-SSE `id`와 `retry`는 reconnect를 하지 않는 one-shot transport에서 소비자가 없으므로 저장하지 않는다. Retry body는 reference-counted `Bytes`를 사용한다. Codex credential/version 파일과 executable metadata probe는 blocking pool에 격리한다.
+SSE `id`와 `retry`는 reconnect를 하지 않는 one-shot transport에서 소비자가 없으므로 저장하지 않는다. Retry body는 reference-counted `Bytes`를 사용한다. Codex auth reference만 regular non-symlink·bounded read로 읽는다. client version은 explicit config, 환경 override, built-in constant로 결정하며 Codex executable·`PATH`·process probe는 수행하지 않는다.
 
 지원 dialect:
 
@@ -139,4 +139,4 @@ Listener를 먼저 bind한 뒤 browser를 연다. request bytes, connection coun
 
 ## 11. 의도적으로 유지한 큰 authority
 
-`model.rs`는 공개 typed domain+validation+serde authority다. `execution_session.rs`는 한 turn의 transport/retry/cleanup/terminal ordering authority다. 물리적 크기만으로 분리하면 불변식의 owner가 흩어진다. 파일별 근거와 비용 판정은 `COMPLEXITY_AUDIT.md`에 있다.
+`model.rs`는 공개 typed domain+validation+serde authority다. `execution_session.rs`는 한 turn의 transport/retry/cleanup/terminal ordering authority다. 물리적 크기만으로 분리하면 불변식의 owner가 흩어진다.

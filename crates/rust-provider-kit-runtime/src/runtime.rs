@@ -49,6 +49,16 @@ struct RuntimeInner {
 ///
 /// Cloning this value shares the same lifecycle and supervisor state. Tool
 /// execution, agent planning, durable run storage, and UI remain caller-owned.
+/// Protocol configuration applies to every provider route in this runtime.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderRuntimeOptions {
+    /// Client version declared to the Codex subscription endpoint.
+    ///
+    /// `None` uses the version this kit implements. An explicit value is
+    /// validated while the runtime is constructed.
+    pub codex_client_version: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct ProviderRuntime {
     inner: Arc<RuntimeInner>,
@@ -82,10 +92,23 @@ impl ProviderRuntime {
     pub fn new(
         credential_store: Arc<dyn ProviderCredentialStore>,
     ) -> Result<Self, ProviderFailure> {
+        Self::with_options(credential_store, ProviderRuntimeOptions::default())
+    }
+
+    /// Build a runtime with explicit protocol configuration.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "ProviderRuntimeOptions is the owned construction contract for ProviderRuntime"
+    )]
+    pub fn with_options(
+        credential_store: Arc<dyn ProviderCredentialStore>,
+        options: ProviderRuntimeOptions,
+    ) -> Result<Self, ProviderFailure> {
         Self::with_components(
             credential_store,
             Arc::new(ReqwestProviderHttpTransport::new()?),
             Arc::new(SystemProviderClock),
+            &options,
         )
     }
 
@@ -93,8 +116,9 @@ impl ProviderRuntime {
         credential_store: Arc<dyn ProviderCredentialStore>,
         transport: Arc<dyn ProviderHttpTransport>,
         clock: Arc<dyn ProviderClock>,
+        options: &ProviderRuntimeOptions,
     ) -> Result<Self, ProviderFailure> {
-        let registry = BuiltInProviderRegistry::new()?;
+        let registry = BuiltInProviderRegistry::new(options)?;
         let (change, _receiver) = watch::channel(());
         let account_supervisor = ProviderAccountSupervisor::new(
             registry.clone(),

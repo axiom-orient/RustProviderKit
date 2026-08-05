@@ -28,6 +28,15 @@ pub(crate) trait ProviderAdapter: Send + Sync {
         &self,
         request: &ProviderTurnRequest,
     ) -> Result<Box<dyn ProviderStreamDecoder>, ProviderFailure>;
+    /// Adapter-specific context to append to an HTTP failure message.
+    ///
+    /// The shared HTTP mapping knows the status and response body, while an
+    /// adapter is the only layer that knows facts about the request identity
+    /// it declared. Adapters return context only when it is directly relevant
+    /// to the route and status; callers must not interpret it as a diagnosis.
+    fn failure_context(&self, _status: u16) -> Option<String> {
+        None
+    }
     async fn inspect(
         &self,
         credential: &ProviderCredentialLease,

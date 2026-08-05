@@ -223,11 +223,11 @@ impl TryFrom<ProviderJsonValue> for serde_json::Value {
         match value {
             ProviderJsonValue::Null => Ok(Self::Null),
             ProviderJsonValue::Bool(value) => Ok(Self::Bool(value)),
-            ProviderJsonValue::Number(value) => serde_json::Number::from_f64(value)
-                .map(Self::Number)
-                .ok_or_else(|| {
+            ProviderJsonValue::Number(value) => {
+                normalized_number(value).map(Self::Number).ok_or_else(|| {
                     ProviderCoreError::invalid_value("provider JSON number is not finite")
-                }),
+                })
+            }
             ProviderJsonValue::String(value) => Ok(Self::String(value)),
             ProviderJsonValue::Array(values) => values
                 .into_iter()
@@ -251,20 +251,34 @@ impl Serialize for ProviderJsonValue {
         match self {
             Self::Null => serializer.serialize_none(),
             Self::Bool(value) => serializer.serialize_bool(*value),
-            Self::Number(value) => {
-                if value.is_finite() {
-                    serializer.serialize_f64(*value)
-                } else {
-                    Err(serde::ser::Error::custom(
-                        "provider JSON number is not finite",
-                    ))
-                }
-            }
+            Self::Number(value) => normalized_number(*value)
+                .ok_or_else(|| serde::ser::Error::custom("provider JSON number is not finite"))
+                .and_then(|number| number.serialize(serializer)),
             Self::String(value) => serializer.serialize_str(value),
             Self::Array(values) => values.serialize(serializer),
             Self::Object(values) => values.serialize(serializer),
         }
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn normalized_number(value: f64) -> Option<serde_json::Number> {
+    if !value.is_finite() {
+        return None;
+    }
+    if value.fract() == 0.0 {
+        const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+        const U64_MAX_EXCLUSIVE_AS_F64: f64 = 18_446_744_073_709_551_616.0;
+        if value >= i64::MIN as f64 && value < I64_MAX_EXCLUSIVE_AS_F64 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            return Some(serde_json::Number::from(value as i64));
+        }
+        if (0.0..U64_MAX_EXCLUSIVE_AS_F64).contains(&value) {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            return Some(serde_json::Number::from(value as u64));
+        }
+    }
+    serde_json::Number::from_f64(value)
 }
 
 impl<'de> Deserialize<'de> for ProviderJsonValue {

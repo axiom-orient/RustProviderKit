@@ -152,7 +152,6 @@ impl OpenRouterOAuthBroker {
             ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             60_000,
             1_024 * 1_024,
             1,

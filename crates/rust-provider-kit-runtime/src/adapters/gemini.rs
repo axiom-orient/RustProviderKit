@@ -373,7 +373,6 @@ impl ProviderAdapter for GeminiGenerateContentAdapter {
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             60_000,
             16 * 1_024 * 1_024,
             1,
@@ -478,14 +477,10 @@ impl ProviderStreamDecoder for GeminiGenerateContentStreamDecoder {
         }
         let root = ProviderJsonValue::decode(event.data.as_bytes())
             .map_err(|_| malformed("Gemini stream JSON is malformed"))?;
-        if let Some(error) = root.get("error") {
-            let message = error
-                .get("message")
-                .and_then(ProviderJsonValue::as_str)
-                .unwrap_or("Gemini stream failed");
+        if root.get("error").is_some() {
             return Err(ProviderFailure::new(
                 ProviderFailureCode::ServerFailed,
-                message,
+                "Gemini stream failed",
             ));
         }
         if let Some(value) = root.get("usageMetadata") {
@@ -613,7 +608,7 @@ impl GeminiGenerateContentStreamDecoder {
             _ => {
                 return Err(ProviderFailure::new(
                     ProviderFailureCode::ServerFailed,
-                    format!("Gemini ended with finish reason {reason}"),
+                    "Gemini ended with an unsupported finish reason",
                 ));
             }
         }

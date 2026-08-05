@@ -293,7 +293,7 @@ impl OpenAiChatAdapter {
         apply_reasoning_policy(self.kind, request, &mut body);
         if self.kind == OpenAiChatKind::OpenRouter {
             body.insert("provider".into(), json!({
-                "allow_fallbacks": request.constraints().allows_provider_endpoint_fallbacks(),
+                "allow_fallbacks": false,
                 "require_parameters": request.constraints().requires_parameter_support(),
                 "data_collection": match request.constraints().data_collection() { rust_provider_kit_core::ProviderDataCollectionPolicy::Deny => "deny", rust_provider_kit_core::ProviderDataCollectionPolicy::Allow => "allow" },
                 "zdr": request.constraints().requires_zero_data_retention()
@@ -480,7 +480,6 @@ impl ProviderAdapter for OpenAiChatAdapter {
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             60_000,
             16 * 1_024 * 1_024,
             1,
@@ -562,15 +561,10 @@ impl ProviderStreamDecoder for OpenAiChatStreamDecoder {
                     "OpenAI chat stream JSON is malformed",
                 )
             })?;
-        if let Some(error) = root.get("error") {
-            let message = error
-                .at(&["message"])
-                .and_then(ProviderJsonValue::as_str)
-                .or_else(|| error.as_str())
-                .unwrap_or("provider stream failed");
+        if root.get("error").is_some() {
             return Err(ProviderFailure::new(
                 ProviderFailureCode::ServerFailed,
-                message,
+                "provider stream failed",
             ));
         }
         if let Some(value) = root.get("id") {
@@ -742,7 +736,7 @@ impl OpenAiChatStreamDecoder {
             _ => {
                 return Err(ProviderFailure::new(
                     ProviderFailureCode::MalformedResponse,
-                    format!("chat stream ended with unsupported finish reason {reason}"),
+                    "chat stream ended with an unsupported finish reason",
                 ));
             }
         }

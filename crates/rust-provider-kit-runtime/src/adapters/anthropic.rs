@@ -387,7 +387,6 @@ impl ProviderAdapter for AnthropicMessagesAdapter {
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,
             true,
             true,
-            false,
             60_000,
             8 * 1_024 * 1_024,
             1,
@@ -628,17 +627,13 @@ impl ProviderStreamDecoder for AnthropicMessagesStreamDecoder {
                     .at(&["error", "type"])
                     .and_then(ProviderJsonValue::as_str)
                     == Some("overloaded_error");
-                let message = root
-                    .at(&["error", "message"])
-                    .and_then(ProviderJsonValue::as_str)
-                    .unwrap_or("Messages stream failed");
                 Err(ProviderFailure::new(
                     if overloaded {
                         ProviderFailureCode::ServerFailed
                     } else {
                         ProviderFailureCode::TransportFailed
                     },
-                    message,
+                    "Messages stream failed",
                 ))
             }
             Some("ping") => Ok(Vec::new()),
@@ -720,9 +715,9 @@ impl AnthropicMessagesStreamDecoder {
                 ));
             }
             _ => {
-                return Err(malformed(format!(
-                    "Messages stream ended with unsupported stop reason {reason}"
-                )));
+                return Err(malformed(
+                    "Messages stream ended with an unsupported stop reason",
+                ));
             }
         }
         self.stopped = true;
