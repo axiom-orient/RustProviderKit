@@ -80,3 +80,12 @@ RustProviderKit의 crate·모듈·공개 API 이름이 아니다. 현재 Provide
 ## 배포 권한
 
 이 workspace는 [MIT License](LICENSE)로 배포한다. 공개 GitHub release 전에는 clean Git commit과 immutable semantic-version tag를 기준 revision으로 기록한다.
+
+## Publication boundary
+
+This repository publishes the Rust contracts and local verification surface. The
+caller remains responsible for durable credential storage, host authorization, and
+external TLS or application policy. `target/`, logs, local environment files, and
+provider credentials are not source inputs. A clean verified commit is required
+before creating a semantic-version tag or publishing a GitHub Release; the local
+gate is the release evidence and GitHub Actions are intentionally out of scope.
