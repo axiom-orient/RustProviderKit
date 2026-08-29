@@ -7,9 +7,8 @@ use rust_provider_kit_core::{
     ProviderCapabilities, ProviderCredentialLease, ProviderCredentialRecord, ProviderDescriptor,
     ProviderFailure, ProviderFailureCode, ProviderInstant, ProviderJsonValue,
     ProviderMessageContent, ProviderMessageRole, ProviderModelCatalogResult, ProviderNativeState,
-    ProviderOutputRequirement, ProviderProtocolFamily, ProviderReasoningEffort,
-    ProviderReasoningPolicy, ProviderRequestConstraints, ProviderToolCall, ProviderToolChoice,
-    ProviderTurnRequest,
+    ProviderOutputRequirement, ProviderProtocolFamily, ProviderReasoningPolicy,
+    ProviderRequestConstraints, ProviderToolCall, ProviderToolChoice, ProviderTurnRequest,
 };
 use serde_json::{Map, Value, json};
 use url::Url;
@@ -22,8 +21,8 @@ use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     array, core_error_failure, default_capabilities, http_failure, json_to_serde,
     make_json_request, merge_account_headers, optional_nonnegative_u64, optional_string,
-    parse_model_catalog, require_api_key, serde_to_json, tool_result_text, transport_failure,
-    usage,
+    parse_model_catalog, provider_stream_failure, require_api_key, serde_to_json, tool_result_text,
+    transport_failure, usage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,7 +313,7 @@ fn apply_reasoning_policy(
             body.insert("reasoning".into(), json!({"enabled":false}));
         }
         (OpenAiChatKind::OpenRouter, ProviderReasoningPolicy::Effort(effort)) => {
-            body.insert("reasoning".into(), json!({"effort":effort_name(*effort)}));
+            body.insert("reasoning".into(), json!({"effort":effort.as_str()}));
         }
         (OpenAiChatKind::DeepSeek, ProviderReasoningPolicy::Disabled) => {
             body.insert("thinking".into(), json!({"type":"disabled"}));
@@ -340,14 +339,6 @@ fn apply_reasoning_policy(
                 json!({"type":if forced {"disabled"} else {"enabled"}}),
             );
         }
-    }
-}
-
-fn effort_name(effort: ProviderReasoningEffort) -> &'static str {
-    match effort {
-        ProviderReasoningEffort::Low => "low",
-        ProviderReasoningEffort::Medium => "medium",
-        ProviderReasoningEffort::High => "high",
     }
 }
 
@@ -562,7 +553,8 @@ impl ProviderStreamDecoder for OpenAiChatStreamDecoder {
                 )
             })?;
         if root.get("error").is_some() {
-            return Err(ProviderFailure::new(
+            return Err(provider_stream_failure(
+                event.data.as_bytes(),
                 ProviderFailureCode::ServerFailed,
                 "provider stream failed",
             ));
@@ -651,6 +643,14 @@ impl ProviderStreamDecoder for OpenAiChatStreamDecoder {
                             "chat tool-call index is out of range",
                         )
                     })?;
+                    if !self.tools.contains_key(&index)
+                        && self.tools.len() >= ProviderTurnRequest::MAXIMUM_TOOLS
+                    {
+                        return Err(ProviderFailure::new(
+                            ProviderFailureCode::MalformedResponse,
+                            "chat stream exceeded tool-call state limit",
+                        ));
+                    }
                     let state = self.tools.entry(index).or_default();
                     if let Some(id) = optional_string(raw_call.get("id"), "chat tool call id")? {
                         state.id = Some(id.to_owned());

@@ -411,11 +411,15 @@ impl ExecutionSession {
         attempt: usize,
     ) -> Result<bool, ProviderFailure> {
         if attempt >= self.request.constraints().maximum_retry_attempts()
-            || !is_retryable(failure.code())
             || !self.is_before_visible_output()
         {
             return Ok(false);
         }
+        let Some(delay_milliseconds) =
+            retry_delay_milliseconds(failure, attempt, self.request.id().as_str())
+        else {
+            return Ok(false);
+        };
         if matches!(
             self.state.phase(),
             ProviderExecutionPhase::Streaming(_, _, false)
@@ -433,13 +437,7 @@ impl ExecutionSession {
             }
             self.state = state;
         }
-        let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
-        let exponential = 250u64.checked_shl(shift).unwrap_or(u64::MAX);
-        let requested = match failure.retry_after_milliseconds() {
-            Some(value) => value,
-            None => exponential,
-        };
-        self.clock.sleep(requested.min(60_000)).await?;
+        self.clock.sleep(delay_milliseconds).await?;
         Ok(true)
     }
 
@@ -587,6 +585,66 @@ fn is_retryable(code: ProviderFailureCode) -> bool {
     )
 }
 
+const MAX_AUTOMATIC_RETRY_DELAY_MILLISECONDS: u64 = 60_000;
+
+fn retry_delay_milliseconds(
+    failure: &ProviderFailure,
+    attempt: usize,
+    request_id: &str,
+) -> Option<u64> {
+    let evidence = failure.evidence();
+    if evidence.and_then(|value| value.provider_should_retry()) == Some(false)
+        || is_long_window_limit(failure)
+    {
+        return None;
+    }
+    if evidence.and_then(|value| value.provider_should_retry()) != Some(true)
+        && !is_retryable(failure.code())
+    {
+        return None;
+    }
+    if let Some(delay) = failure.retry_after_milliseconds() {
+        if delay == 0 || delay > MAX_AUTOMATIC_RETRY_DELAY_MILLISECONDS {
+            return None;
+        }
+        return Some(delay);
+    }
+    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+    let exponential = 250u64.checked_shl(shift).unwrap_or(u64::MAX);
+    let jitter = retry_jitter_millis(request_id, attempt);
+    Some(
+        exponential
+            .saturating_mul(jitter)
+            .checked_div(1_000)
+            .unwrap_or(MAX_AUTOMATIC_RETRY_DELAY_MILLISECONDS)
+            .clamp(1, MAX_AUTOMATIC_RETRY_DELAY_MILLISECONDS),
+    )
+}
+
+fn is_long_window_limit(failure: &ProviderFailure) -> bool {
+    let Some(evidence) = failure.evidence() else {
+        return false;
+    };
+    [
+        "usage_limit_reached",
+        "rate_limit_reached",
+        "insufficient_quota",
+        "quota_exceeded",
+    ]
+    .into_iter()
+    .any(|candidate| {
+        evidence.remote_error_type() == Some(candidate)
+            || evidence.remote_error_code() == Some(candidate)
+    })
+}
+
+fn retry_jitter_millis(request_id: &str, attempt: usize) -> u64 {
+    let seed = request_id.bytes().fold(attempt as u64, |value, byte| {
+        value.wrapping_mul(131).wrapping_add(u64::from(byte))
+    });
+    750 + (seed % 251)
+}
+
 fn cancelled_failure(request: &ProviderTurnRequest) -> ProviderFailure {
     ProviderFailure::new(ProviderFailureCode::Cancelled, "provider request cancelled")
         .with_request_id(request.id().clone())
@@ -597,13 +655,17 @@ fn invariant_failure(request: &ProviderTurnRequest, message: &str) -> ProviderFa
         .with_request_id(request.id().clone())
 }
 
-fn with_failure_context(failure: ProviderFailure, context: Option<&str>) -> ProviderFailure {
+pub(crate) fn with_failure_context(
+    failure: ProviderFailure,
+    context: Option<&str>,
+) -> ProviderFailure {
     let Some(context) = context else {
         return failure;
     };
     let status = failure.provider_status_code();
     let retry_after = failure.retry_after_milliseconds();
     let request_id = failure.request_id().cloned();
+    let evidence = failure.evidence().cloned();
     let mut enriched =
         ProviderFailure::new(failure.code(), format!("{} ({context})", failure.message()));
     if let Some(status) = status {
@@ -618,5 +680,107 @@ fn with_failure_context(failure: ProviderFailure, context: Option<&str>) -> Prov
     if let Some(request_id) = request_id {
         enriched = enriched.with_request_id(request_id);
     }
+    if let Some(evidence) = evidence {
+        enriched = enriched.with_evidence(evidence);
+    }
     enriched
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use rust_provider_kit_core::ProviderFailureEvidence;
+
+    fn rate_limit(token: &str, retry_after: Option<u64>) -> ProviderFailure {
+        let evidence = ProviderFailureEvidence::new(2, "a".repeat(64))
+            .unwrap_or_else(|_| unreachable!())
+            .with_remote_error_code(token)
+            .unwrap_or_else(|_| unreachable!());
+        let mut failure = ProviderFailure::new(ProviderFailureCode::RateLimited, "limited")
+            .with_status(429)
+            .unwrap_or_else(|_| unreachable!())
+            .with_evidence(evidence);
+        if let Some(delay) = retry_after {
+            failure = failure.with_retry_after(delay);
+        }
+        failure
+    }
+
+    #[test]
+    fn quota_and_long_server_delay_are_not_automatically_retried() {
+        assert_eq!(
+            retry_delay_milliseconds(&rate_limit("usage_limit_reached", Some(1_000)), 1, "req"),
+            None
+        );
+        assert_eq!(
+            retry_delay_milliseconds(&rate_limit("rate_limit_error", Some(60_001)), 1, "req"),
+            None
+        );
+        assert_eq!(
+            retry_delay_milliseconds(&rate_limit("rate_limit_reached", None), 1, "req"),
+            None
+        );
+    }
+
+    #[test]
+    fn transient_rate_limit_honors_short_server_delay() {
+        assert_eq!(
+            retry_delay_milliseconds(&rate_limit("rate_limit_error", Some(2_000)), 1, "req"),
+            Some(2_000)
+        );
+    }
+
+    #[test]
+    fn explicit_provider_no_retry_wins() {
+        let evidence = ProviderFailureEvidence::new(2, "a".repeat(64))
+            .unwrap_or_else(|_| unreachable!())
+            .with_provider_should_retry(false);
+        let failure = ProviderFailure::new(ProviderFailureCode::ServerFailed, "failed")
+            .with_status(503)
+            .unwrap_or_else(|_| unreachable!())
+            .with_retry_after(2_000)
+            .with_evidence(evidence);
+        assert_eq!(retry_delay_milliseconds(&failure, 1, "req"), None);
+    }
+
+    #[test]
+    fn explicit_provider_retry_can_enable_an_otherwise_terminal_http_failure() {
+        let evidence = ProviderFailureEvidence::new(2, "a".repeat(64))
+            .unwrap_or_else(|_| unreachable!())
+            .with_provider_should_retry(true);
+        let failure = ProviderFailure::new(ProviderFailureCode::InvalidRequest, "failed")
+            .with_status(409)
+            .unwrap_or_else(|_| unreachable!())
+            .with_evidence(evidence);
+        assert!(retry_delay_milliseconds(&failure, 1, "req").is_some());
+    }
+
+    #[test]
+    fn stream_quota_waits_for_reset_but_transient_stream_429_retries() {
+        let quota = crate::wire::provider_stream_failure(
+            br#"{"type":"response.failed","status":429,"response":{"error":{"type":"usage_limit_reached","resets_in_seconds":90}}}"#,
+            ProviderFailureCode::ServerFailed,
+            "provider stream failed",
+        );
+        assert_eq!(quota.code(), ProviderFailureCode::RateLimited);
+        assert_eq!(quota.retry_after_milliseconds(), Some(90_000));
+        assert_eq!(retry_delay_milliseconds(&quota, 1, "req"), None);
+
+        let transient = crate::wire::provider_stream_failure(
+            br#"{"type":"error","status":429,"error":{"type":"rate_limit_error"},"headers":{"retry-after":"2"}}"#,
+            ProviderFailureCode::ServerFailed,
+            "provider stream failed",
+        );
+        assert_eq!(transient.code(), ProviderFailureCode::RateLimited);
+        assert_eq!(transient.retry_after_milliseconds(), Some(2_000));
+        assert_eq!(retry_delay_milliseconds(&transient, 1, "req"), Some(2_000));
+
+        let exhausted_window = crate::wire::provider_stream_failure(
+            br#"{"type":"error","status":429,"error":{"type":"rate_limit_error"},"headers":{"x-ratelimit-remaining-requests":"0","x-ratelimit-reset-requests":"1m30s"}}"#,
+            ProviderFailureCode::ServerFailed,
+            "provider stream failed",
+        );
+        assert_eq!(exhausted_window.retry_after_milliseconds(), Some(90_000));
+        assert_eq!(retry_delay_milliseconds(&exhausted_window, 1, "req"), None);
+    }
 }

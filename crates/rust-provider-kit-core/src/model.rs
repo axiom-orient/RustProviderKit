@@ -806,6 +806,16 @@ pub enum ProviderReasoningEffort {
     Medium,
     High,
 }
+impl ProviderReasoningEffort {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "effort", rename_all = "snake_case")]
 pub enum ProviderReasoningPolicy {

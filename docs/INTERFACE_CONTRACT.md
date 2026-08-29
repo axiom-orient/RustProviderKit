@@ -23,6 +23,67 @@
 
 그 외 Runtime 구현 타입은 공개 계약이 아니다.
 
+## RGXAMK native provider leaf
+
+`rgxamk-native-provider` is a separate binary crate and does not change the
+runtime facade. Its argv is explicit and complete:
+
+```text
+--account-id ID --model MODEL --auth-file ABSOLUTE_PATH
+--codex-client-version VERSION --operation-timeout-ms MILLISECONDS
+--upstream-max-response-bytes BYTES
+[--failure-diagnostics v1]
+```
+
+Unknown, missing, duplicate, relative-path, and out-of-bound arguments fail
+closed. The binary does not inspect environment credentials, model settings,
+installed Codex clients, or fallback routes. It reads exactly one bounded
+`rgx.agent.provider-request.v3` JSON object with denied unknown top-level fields.
+The request capabilities determine one strict action-object schema for exactly
+one named tool, `rgxamk_action`. With multiple negotiated capabilities, Codex
+receives a flat strict object: `type` is an enum of the negotiated kinds, every
+non-type field contributed by those kinds is required and nullable, and
+`additionalProperties` is false. After the selected type is known, only null
+fields belonging to another negotiated kind are removed. Unknown or
+unnegotiated fields (including nulls) and non-null inactive fields are rejected.
+With one capability, only that kind's strict object is accepted. The process
+rejects v1, text deltas, wrong or multiple tools, failed/cancelled/incomplete
+terminals, malformed or oversized arguments, and capability violations. It
+never executes actions. On success it writes exactly one newline-terminated
+`rgx.agent.provider-response.v2` JSON line. Without `--failure-diagnostics`,
+failure writes exactly one legacy stable `code/message` line to stderr and no
+stdout. With `--failure-diagnostics v1`, provider failures write that same
+stable line followed by exactly one line prefixed
+`rgxamk-native-provider diagnostic-v1 `; its compact JSON is at most 2 KiB and
+contains only the typed failure code/status, bounded Retry-After, body
+byte-count/SHA-256, validated request ID, allowlisted remote error type/code,
+provider retry direction, an optional Unix-second reset time, and bounded
+numeric Codex rate-limit fields. `retry_disposition` is one of `retry_soon`,
+`wait_until_reset`, `user_action`, or `do_not_retry`. It never contains raw body,
+message, headers, credentials, account IDs, paths, or request payloads.
+
+The leaf registers `codex` with an absolute `ExternalAuthFile` reference in a
+private ephemeral credential store, requires the successful active terminal and
+lease read-back, and sets `maximum_retry_attempts = 3` (one initial attempt and
+at most two retries). Retry stays on the exact immutable route and is allowed
+only before visible output. `usage_limit_reached`, `rate_limit_reached`,
+`insufficient_quota`, and `quota_exceeded` never auto-retry; a reset delay over
+60 seconds also returns immediately. `Retry-After` is authoritative. If it is
+absent, validated OpenAI request, token, and project-token reset duration
+headers are a fallback. A valid
+`x-should-retry: false` stops retry, while `true` may enable a bounded retry for
+an otherwise terminal HTTP response. The same typed policy is applied to
+provider error events received after a successful HTTP stream open; visible
+output still permanently disables retry. Its
+`--operation-timeout-ms` is one total work deadline for registration, active
+lease read-back, the turn, and normal runtime shutdown. The leaf derives the
+inner `ProviderTurnRequest` timeout from the remaining operation budget; it is
+always positive and never exceeds that remaining budget. If the operation
+deadline expires, runtime shutdown/cancellation is joined within a fixed
+10,000ms cleanup reserve. The 100,000ms maximum operation setting plus that
+reserve stays below RGXAMK's 120-second outer process timeout. Runtime
+shutdown/join completes before the success line.
+
 ## Platform surface
 
 | Type | 계약 |
@@ -34,7 +95,9 @@
 ## Input
 
 - identifier, label, tool/schema, continuation, JSON은 typed·bounded다.
-- timeout `1,000...3,600,000ms`, response bytes, retry, output-token limit을 검증한다.
+- native leaf operation timeout `1,000...100,000ms` and response bytes are
+  validated at the process boundary; core request constraints continue to
+  enforce their own timeout, response, retry, and output-token bounds.
 - Provider/account/model 선택은 독립 값이며 lease의 account/provider/source/active state와 일치해야 한다.
 - HTTP request는 absolute HTTPS, no userinfo/fragment, valid header여야 한다.
 - Account endpoint는 최대 16개의 non-sensitive integration header를 가질 수 있다. 인증, API key, `accept`, content/host/connection/transfer header 재정의는 거부한다.
@@ -55,6 +118,12 @@ Started
 - terminal slot은 backlog와 별도로 예약한다.
 - terminal은 transport termination과 cleanup 뒤에 공개한다.
 - visible output 이후에는 retry하지 않는다.
+- automatic retry는 같은 route에서 총 세 번 이하이며 전체 request deadline을
+  새로 시작하지 않는다. `retry-after-ms` 또는 Retry-After가 1..=60초면 최소
+  대기로 존중하고, 값이 없으면 request ID로 분산된 bounded exponential backoff를
+  사용한다.
+- 장기 quota/reset, billing/spend-control, credential recovery는 sleeping loop나
+  provider fallback으로 숨기지 않고 typed terminal로 반환한다.
 - request/account admission ID는 terminal 공개 직전에 해제한다.
 - `ProviderTurnRequest` clone은 immutable shared storage를 사용하지만 serde·Debug·accessor의 공개 의미는 동일하다.
 - SSE reconnect를 수행하지 않으므로 wire `id`와 `retry`는 파싱 결과에 보존하지 않는다.
@@ -85,7 +154,17 @@ Provider endpoint fallback은 지원하지 않는다. OpenRouter 요청도 fallb
 `ProviderFailureCode`는 invalid request, unsupported provider/capability, account/auth/permission, transport/server/rate-limit, malformed/oversized response, backpressure, cancellation, timeout, recovery requirement, internal invariant를 구분한다.
 
 - reqwest timeout은 `TimedOut`으로 분류한다.
-- provider error body와 OAuth secret은 redacted message로 정규화한다.
+- 429는 동일하지 않다. 짧은 rolling-window 제한은 `retry_soon`,
+  `usage_limit_reached`/`rate_limit_reached` 또는 확인된 긴 reset은
+  `wait_until_reset`, `insufficient_quota`/`quota_exceeded`와
+  auth/billing/permission은 `user_action`으로 구분한다.
+- Codex의 `resets_at`/`reset_at` 또는 bounded `resets_in_seconds` body field와
+  `used-percent`/`window-minutes` header는
+  정수·범위 검증 후에만 evidence로 보존한다. reset은 Unix seconds다.
+- OpenAI의 request/token/project-token reset duration은 `Retry-After`가 없을 때만 사용하며
+  숫자 seconds 또는 bounded `ms`/`s`/`m`/`h` 조합만 수용한다.
+- HTTP 2xx 뒤 stream error도 같은 redacted evidence와 retry gate를 사용한다.
+- provider error body는 public error에 절대 포함하지 않고 HTTP status만 공개한다. OAuth secret은 redacted message로 정규화한다.
 - Codex route의 4xx에는 선언된 client version에 관한 중립적 context만 추가하며, 다른 4xx 원인을 단정하지 않는다.
 - malformed optional wire field를 누락으로 보정하지 않는다.
 - worker panic/abort와 producer 소멸은 영구 대기 대신 explicit terminal 또는 completion으로 수렴한다.

@@ -832,6 +832,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rgxamk-native-provider"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "parking_lot",
+ "rust-provider-kit-core",
+ "rust-provider-kit-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -847,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "rust-provider-kit-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -862,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "rust-provider-kit-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -877,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "rust-provider-kit-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -890,6 +904,7 @@ dependencies = [
  "reqwest",
  "rust-provider-kit-core",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "time",

@@ -8,6 +8,8 @@ use crate::ProviderCoreError;
 pub enum ProviderJsonValue {
     Null,
     Bool(bool),
+    Integer(i64),
+    UnsignedInteger(u64),
     Number(f64),
     String(String),
     Array(Vec<Self>),
@@ -67,6 +69,8 @@ impl ProviderJsonValue {
     pub fn as_i64(&self) -> Option<i64> {
         const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
         match self {
+            Self::Integer(value) => Some(*value),
+            Self::UnsignedInteger(value) => i64::try_from(*value).ok(),
             Self::Number(value)
                 if value.is_finite()
                     && value.fract() == 0.0
@@ -113,7 +117,7 @@ impl ProviderJsonValue {
             ));
         }
         match self {
-            Self::Null | Self::Bool(_) => Ok(()),
+            Self::Null | Self::Bool(_) | Self::Integer(_) | Self::UnsignedInteger(_) => Ok(()),
             Self::Number(value) => {
                 if value.is_finite() {
                     Ok(())
@@ -191,6 +195,12 @@ impl TryFrom<serde_json::Value> for ProviderJsonValue {
             serde_json::Value::Null => Ok(Self::Null),
             serde_json::Value::Bool(value) => Ok(Self::Bool(value)),
             serde_json::Value::Number(value) => {
+                if let Some(integer) = value.as_i64() {
+                    return Ok(Self::Integer(integer));
+                }
+                if let Some(integer) = value.as_u64() {
+                    return Ok(Self::UnsignedInteger(integer));
+                }
                 let number = value.as_f64().ok_or_else(|| {
                     ProviderCoreError::invalid_value("provider JSON number is out of range")
                 })?;
@@ -223,6 +233,8 @@ impl TryFrom<ProviderJsonValue> for serde_json::Value {
         match value {
             ProviderJsonValue::Null => Ok(Self::Null),
             ProviderJsonValue::Bool(value) => Ok(Self::Bool(value)),
+            ProviderJsonValue::Integer(value) => Ok(Self::Number(value.into())),
+            ProviderJsonValue::UnsignedInteger(value) => Ok(Self::Number(value.into())),
             ProviderJsonValue::Number(value) => {
                 normalized_number(value).map(Self::Number).ok_or_else(|| {
                     ProviderCoreError::invalid_value("provider JSON number is not finite")
@@ -251,6 +263,8 @@ impl Serialize for ProviderJsonValue {
         match self {
             Self::Null => serializer.serialize_none(),
             Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Integer(value) => serializer.serialize_i64(*value),
+            Self::UnsignedInteger(value) => serializer.serialize_u64(*value),
             Self::Number(value) => normalized_number(*value)
                 .ok_or_else(|| serde::ser::Error::custom("provider JSON number is not finite"))
                 .and_then(|number| number.serialize(serializer)),
@@ -300,12 +314,12 @@ impl From<bool> for ProviderJsonValue {
 }
 impl From<i64> for ProviderJsonValue {
     fn from(value: i64) -> Self {
-        Self::Number(value as f64)
+        Self::Integer(value)
     }
 }
 impl From<i32> for ProviderJsonValue {
     fn from(value: i32) -> Self {
-        Self::Number(f64::from(value))
+        Self::Integer(i64::from(value))
     }
 }
 impl From<String> for ProviderJsonValue {

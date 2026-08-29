@@ -9,6 +9,7 @@ use rust_provider_kit_core::{
     ProviderCredentialMaterial, ProviderDataCollectionPolicy, ProviderFailure, ProviderFailureCode,
     ProviderJsonValue, ProviderPkce, ProviderRequestConstraints, SensitiveValue,
 };
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::http_transport::ProviderHttpTransport;
@@ -111,6 +112,7 @@ impl OpenRouterOAuthBroker {
         &self,
         request: OpenRouterOAuthRegistrationRequest,
         session: &dyn ProviderAuthorizationSession,
+        cancellation: &CancellationToken,
     ) -> Result<ProviderAccountRegistrationRequest, ProviderFailure> {
         let callback = callback_with_state(request.callback_url(), request.pkce().state());
         let authorization_url = authorization_url(&callback, request.pkce())?;
@@ -122,12 +124,31 @@ impl OpenRouterOAuthBroker {
         )
         .map_err(core_error_failure)?;
 
-        let mut cancellation = AuthorizationCancellationGuard::new(session);
-        let result = session.authorize(authorization_request).await?;
-        cancellation.disarm();
+        let mut cancellation_guard = AuthorizationCancellationGuard::new(session);
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                session.cancel();
+                return Err(ProviderFailure::new(
+                    ProviderFailureCode::Cancelled,
+                    "OpenRouter OAuth authorization was cancelled",
+                ));
+            }
+            result = session.authorize(authorization_request) => result?,
+        };
+        cancellation_guard.disarm();
 
         let code = validate_callback(result.callback_url(), &callback, request.pkce().state())?;
-        let key = self.exchange(&code, request.pkce()).await?;
+        let key = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {
+                return Err(ProviderFailure::new(
+                    ProviderFailureCode::Cancelled,
+                    "OpenRouter OAuth key exchange was cancelled",
+                ));
+            }
+            result = self.exchange(&code, request.pkce()) => result?,
+        };
         ProviderAccountRegistrationRequest::new(
             request.account_id().clone(),
             BuiltInProviderId::open_router(),

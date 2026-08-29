@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -617,6 +618,33 @@ impl ProviderAuthorizationSession for BlockingAuthorizationSession {
     fn cancel(&self) {}
 }
 
+#[derive(Clone)]
+struct CancellableAuthorizationSession {
+    entered: Arc<tokio::sync::Barrier>,
+    cancelled: Arc<tokio::sync::Notify>,
+    cancel_called: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl ProviderAuthorizationSession for CancellableAuthorizationSession {
+    async fn authorize(
+        &self,
+        _request: ProviderAuthorizationRequest,
+    ) -> Result<ProviderAuthorizationResult, ProviderFailure> {
+        self.entered.wait().await;
+        self.cancelled.notified().await;
+        Err(ProviderFailure::new(
+            ProviderFailureCode::Cancelled,
+            "test authorization cancelled",
+        ))
+    }
+
+    fn cancel(&self) {
+        self.cancel_called.store(true, Ordering::SeqCst);
+        self.cancelled.notify_waiters();
+    }
+}
+
 #[tokio::test]
 async fn in_flight_oauth_registration_fences_reconciliation() -> Result<(), Box<dyn Error>> {
     let runtime = ProviderRuntime::with_components(
@@ -663,6 +691,58 @@ async fn in_flight_oauth_registration_fences_reconciliation() -> Result<(), Box<
         .err()
         .ok_or("cancelled test authorization unexpectedly succeeded")?;
     assert_eq!(oauth_failure.code(), ProviderFailureCode::Cancelled);
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancel_registration_interrupts_in_flight_oauth_authorization() -> Result<(), Box<dyn Error>>
+{
+    let runtime = ProviderRuntime::with_components(
+        Arc::new(InMemoryProviderCredentialStore::default()),
+        Arc::new(CapturingUnaryTransport::default()),
+        Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
+    )?;
+    let account_id = ProviderAccountId::new("oauth-cancel-account")?;
+    let pkce = ProviderPkce::new(
+        SensitiveValue::new("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")?,
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "abcdefghijklmnopqrstuvwxyzABCDEF",
+    )?;
+    let request = OpenRouterOAuthRegistrationRequest::new(
+        account_id.clone(),
+        "OpenRouter",
+        Url::parse("http://127.0.0.1:49152/oauth/openrouter")?,
+        pkce,
+    )?;
+    let entered = Arc::new(tokio::sync::Barrier::new(2));
+    let authorization = Arc::new(CancellableAuthorizationSession {
+        entered: Arc::clone(&entered),
+        cancelled: Arc::new(tokio::sync::Notify::new()),
+        cancel_called: Arc::new(AtomicBool::new(false)),
+    });
+    let cancel_called = Arc::clone(&authorization.cancel_called);
+    let oauth_runtime = runtime.clone();
+    let oauth = tokio::spawn(async move {
+        oauth_runtime
+            .register_open_router_oauth(request, authorization.as_ref())
+            .await
+    });
+    entered.wait().await;
+
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        runtime.cancel_registration(&account_id),
+    )
+    .await
+    .map_err(|_| "OAuth cancellation did not complete")?;
+    let oauth_failure = oauth
+        .await?
+        .err()
+        .ok_or("cancelled OAuth authorization unexpectedly succeeded")?;
+    assert_eq!(oauth_failure.code(), ProviderFailureCode::Cancelled);
+    assert!(cancel_called.load(Ordering::SeqCst));
     runtime.shutdown().await;
     Ok(())
 }
@@ -1363,6 +1443,212 @@ fn openai_responses_decoder_emits_text_tool_and_completion() -> Result<(), Box<d
 }
 
 #[test]
+fn openai_responses_decoder_rejects_missing_delta_fields() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_ai())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    for event_type in [
+        "response.output_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.function_call_arguments.delta",
+    ] {
+        let failure = decoder
+            .consume(&event(
+                Some(event_type),
+                &format!(r#"{{"type":"{event_type}"}}"#),
+            ))
+            .err()
+            .ok_or("missing Responses delta field was ignored")?;
+        assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    }
+    Ok(())
+}
+
+#[test]
+fn openai_responses_decoder_rejects_item_id_as_a_tool_call_id() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_ai())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    decoder.consume(&event(
+        Some("response.output_item.added"),
+        r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"item-1","name":"lookup"}}"#,
+    ))?;
+    let failure = decoder
+        .consume(&event(
+            Some("response.function_call_arguments.done"),
+            r#"{"type":"response.function_call_arguments.done","item_id":"item-1","arguments":"{}"}"#,
+        ))
+        .err()
+        .ok_or("Responses accepted an item ID as a tool call ID")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    Ok(())
+}
+
+#[test]
+fn openai_responses_decoder_bounds_tool_call_state() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_ai())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    for index in 0..ProviderTurnRequest::MAXIMUM_TOOLS {
+        let payload = format!(
+            r#"{{"type":"response.output_item.added","item":{{"type":"function_call","id":"item-{index}","call_id":"call-{index}","name":"lookup"}}}}"#
+        );
+        assert!(
+            decoder
+                .consume(&event(Some("response.output_item.added"), &payload))?
+                .is_empty()
+        );
+    }
+    let failure = decoder
+        .consume(&event(
+            Some("response.output_item.added"),
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"item-overflow","call_id":"call-overflow","name":"lookup"}}"#,
+        ))
+        .err()
+        .ok_or("Responses accepted an unbounded number of tool states")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    Ok(())
+}
+
+#[test]
+fn gemini_decoder_bounds_function_calls() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::gemini())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    let mut payload = String::from(r#"{"candidates":[{"content":{"role":"model","parts":["#);
+    for index in 0..ProviderTurnRequest::MAXIMUM_TOOLS {
+        if index > 0 {
+            payload.push(',');
+        }
+        payload.push_str(r#"{"functionCall":{"name":"lookup","args":{}}}"#);
+    }
+    payload.push_str(r#"]}}]}"#);
+    let emitted = decoder.consume(&event(None, &payload))?;
+    assert_eq!(emitted.len(), ProviderTurnRequest::MAXIMUM_TOOLS);
+    assert!(
+        emitted
+            .iter()
+            .all(|event| matches!(event, ProviderDecodedEvent::ToolCall(_)))
+    );
+
+    let failure = decoder
+        .consume(&event(
+            None,
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}}]}}]}"#,
+        ))
+        .err()
+        .ok_or("Gemini accepted an unbounded number of function calls")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    Ok(())
+}
+
+#[test]
+fn anthropic_decoder_bounds_sequential_tool_blocks() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::anthropic())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    assert!(
+        decoder
+            .consume(&event(
+                None,
+                r#"{"type":"message_start","message":{"id":"bound","usage":{"input_tokens":1}}}"#,
+            ))?
+            .is_empty()
+    );
+
+    for index in 0..ProviderTurnRequest::MAXIMUM_TOOLS {
+        let start = format!(
+            r#"{{"type":"content_block_start","index":{index},"content_block":{{"type":"tool_use","id":"call-{index}","name":"lookup","input":{{}}}}}}"#
+        );
+        assert!(decoder.consume(&event(None, &start))?.is_empty());
+        let stop = format!(r#"{{"type":"content_block_stop","index":{index}}}"#);
+        let emitted = decoder.consume(&event(None, &stop))?;
+        assert!(matches!(
+            emitted.as_slice(),
+            [ProviderDecodedEvent::ToolCall(_)]
+        ));
+    }
+
+    let start = format!(
+        r#"{{"type":"content_block_start","index":{},"content_block":{{"type":"tool_use","id":"call-overflow","name":"lookup","input":{{}}}}}}"#,
+        ProviderTurnRequest::MAXIMUM_TOOLS
+    );
+    let failure = decoder
+        .consume(&event(None, &start))
+        .err()
+        .ok_or("Anthropic accepted more than the tool-call cap")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    Ok(())
+}
+
+#[test]
+fn openai_chat_decoder_bounds_distinct_tool_indices() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_router())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    let mut calls = String::new();
+    for index in 0..ProviderTurnRequest::MAXIMUM_TOOLS {
+        if index > 0 {
+            calls.push(',');
+        }
+        calls.push_str(&format!(
+            r#"{{"index":{index},"id":"call-{index}","function":{{"name":"lookup","arguments":"{{}}"}}}}"#
+        ));
+    }
+    let payload = format!(
+        r#"{{"choices":[{{"index":0,"delta":{{"tool_calls":[{calls}]}},"finish_reason":null}}]}}"#
+    );
+    assert!(decoder.consume(&event(None, &payload))?.is_empty());
+    assert!(
+        decoder
+            .consume(&event(
+                None,
+                r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ))?
+            .is_empty()
+    );
+    let completed = decoder.consume(&event(None, "[DONE]"))?;
+    assert_eq!(
+        completed
+            .iter()
+            .filter(|event| matches!(event, ProviderDecodedEvent::ToolCall(_)))
+            .count(),
+        ProviderTurnRequest::MAXIMUM_TOOLS
+    );
+    assert!(
+        completed
+            .iter()
+            .take(ProviderTurnRequest::MAXIMUM_TOOLS)
+            .all(|event| matches!(event, ProviderDecodedEvent::ToolCall(_)))
+    );
+    assert!(matches!(
+        completed.last(),
+        Some(ProviderDecodedEvent::Completion(_))
+    ));
+
+    let mut overflow_decoder = adapter.make_decoder(&request)?;
+    assert!(overflow_decoder.consume(&event(None, &payload))?.is_empty());
+    let failure = overflow_decoder
+        .consume(&event(
+            None,
+            &format!(
+                r#"{{"choices":[{{"index":0,"delta":{{"tool_calls":[{{"index":{},"id":"call-overflow","function":{{"name":"lookup","arguments":"{{}}"}}}}]}},"finish_reason":null}}]}}"#,
+                ProviderTurnRequest::MAXIMUM_TOOLS
+            ),
+        ))
+        .err()
+        .ok_or("OpenAI chat accepted more than the distinct tool-index cap")?;
+    assert_eq!(failure.code(), ProviderFailureCode::MalformedResponse);
+    Ok(())
+}
+
+#[test]
 fn anthropic_decoder_binds_delta_to_opened_content_block_type() -> Result<(), Box<dyn Error>> {
     let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::anthropic())?;
@@ -1484,6 +1770,78 @@ fn retry_after_date_and_usage_overflow_are_deterministic() -> Result<(), Box<dyn
 }
 
 #[test]
+fn retry_after_millisecond_header_and_fractional_seconds_are_bounded() {
+    let headers = BTreeMap::from([
+        ("retry-after-ms".to_owned(), "1500".to_owned()),
+        ("retry-after".to_owned(), "9".to_owned()),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        b"{}",
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(1_500));
+
+    let headers = BTreeMap::from([("retry-after".to_owned(), "10.632".to_owned())]);
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        b"{}",
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(10_632));
+}
+
+#[test]
+fn openai_reset_headers_fill_missing_retry_after_without_overriding_it() {
+    let headers = BTreeMap::from([
+        ("x-ratelimit-remaining-requests".to_owned(), "0".to_owned()),
+        ("x-ratelimit-reset-requests".to_owned(), "8.64s".to_owned()),
+        ("x-ratelimit-remaining-tokens".to_owned(), "10".to_owned()),
+        ("x-ratelimit-reset-tokens".to_owned(), "131ms".to_owned()),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        br#"{"error":{"type":"rate_limit_error"}}"#,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(8_640));
+
+    let project = BTreeMap::from([
+        (
+            "x-ratelimit-remaining-project-tokens".to_owned(),
+            "0".to_owned(),
+        ),
+        (
+            "x-ratelimit-reset-project-tokens".to_owned(),
+            "45s".to_owned(),
+        ),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &project,
+        br#"{"error":{"type":"rate_limit_error"}}"#,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(45_000));
+
+    let explicit = BTreeMap::from([
+        ("retry-after-ms".to_owned(), "2000".to_owned()),
+        ("x-ratelimit-remaining-requests".to_owned(), "0".to_owned()),
+        ("x-ratelimit-reset-requests".to_owned(), "1m30s".to_owned()),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &explicit,
+        br#"{"error":{"type":"rate_limit_error"}}"#,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(2_000));
+}
+
+#[test]
 fn gemini_isolates_thoughts_and_generates_missing_function_call_ids() -> Result<(), Box<dyn Error>>
 {
     let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
@@ -1549,6 +1907,25 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
     assert_eq!(failure.message(), "provider stream failed");
     assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
 
+    let request = request_for(BuiltInProviderId::open_router())?;
+    let mut chat_limit = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = chat_limit
+        .consume(&event(
+            None,
+            r#"{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"secret"}}"#,
+        ))
+        .err()
+        .ok_or("chat stream rate limit was accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::RateLimited);
+    assert_eq!(
+        failure
+            .evidence()
+            .and_then(|value| value.remote_error_code()),
+        Some("rate_limit_exceeded")
+    );
+
     let request = request_for(BuiltInProviderId::open_ai())?;
     let mut responses = registry
         .adapter(request.selection().provider_id())?
@@ -1578,6 +1955,27 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
     assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
     assert_eq!(failure.message(), "Messages stream failed");
     assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+    assert_eq!(
+        failure
+            .evidence()
+            .and_then(|value| value.remote_error_type()),
+        Some("overloaded_error")
+    );
+
+    let request = request_for(BuiltInProviderId::gemini())?;
+    let mut gemini_limit = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let failure = gemini_limit
+        .consume(&event(
+            None,
+            r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"secret"}}"#,
+        ))
+        .err()
+        .ok_or("Gemini stream quota was accepted")?;
+    assert_eq!(failure.code(), ProviderFailureCode::RateLimited);
+    assert_eq!(failure.provider_status_code(), Some(429));
+    assert!(failure.evidence().is_some());
 
     let request = request_for(BuiltInProviderId::anthropic())?;
     let mut messages = registry
@@ -1632,6 +2030,48 @@ fn provider_decoders_fail_closed_on_unsuccessful_terminal_states() -> Result<(),
     assert_eq!(failure.code(), ProviderFailureCode::ServerFailed);
     assert_eq!(failure.message(), "Gemini stream failed");
     assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+    Ok(())
+}
+
+#[test]
+fn responses_stream_quota_failure_preserves_typed_reset_evidence() -> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_ai())?;
+    let mut responses = registry
+        .adapter(request.selection().provider_id())?
+        .make_decoder(&request)?;
+    let body = r#"{"type":"response.failed","status":429,"response":{"error":{"type":"usage_limit_reached","code":"rate_limit_reached","message":"secret upstream detail","resets_at":1738888888}},"headers":{"x-request-id":"req_stream_42","x-should-retry":"false","x-codex-primary-used-percent":"100.0","x-codex-primary-window-minutes":300}}"#;
+    let failure = responses
+        .consume(&event(Some("response.failed"), body))
+        .err()
+        .ok_or("Responses quota failure was accepted")?;
+
+    assert_eq!(failure.code(), ProviderFailureCode::RateLimited);
+    assert_eq!(failure.provider_status_code(), Some(429));
+    assert_eq!(failure.message(), "provider stream failed");
+    assert!(!failure.message().contains("secret upstream detail"));
+    let evidence = failure
+        .evidence()
+        .ok_or("Responses quota evidence was discarded")?;
+    assert_eq!(evidence.remote_error_type(), Some("usage_limit_reached"));
+    assert_eq!(evidence.remote_error_code(), Some("rate_limit_reached"));
+    assert_eq!(evidence.reset_at_unix_seconds(), Some(1_738_888_888));
+    assert_eq!(evidence.provider_should_retry(), Some(false));
+    assert_eq!(evidence.upstream_request_id(), Some("req_stream_42"));
+    assert_eq!(
+        evidence
+            .codex_primary()
+            .and_then(ProviderRateLimitEvidence::used_percent_millis),
+        Some(100_000)
+    );
+    assert_eq!(
+        evidence
+            .codex_primary()
+            .and_then(ProviderRateLimitEvidence::window_minutes),
+        Some(300)
+    );
+    assert_eq!(evidence.body_bytes(), Some(body.len() as u64));
+    assert_eq!(evidence.body_sha256().map(str::len), Some(64));
     Ok(())
 }
 
@@ -1785,10 +2225,16 @@ fn strict_model_catalog_validation_rejects_duplicates_and_invalid_limits()
 fn http_failures_are_typed_redacted_and_use_injected_time() -> Result<(), Box<dyn Error>> {
     let mut headers = BTreeMap::new();
     headers.insert("retry-after".to_owned(), "2".to_owned());
+    headers.insert("x-request-id".to_owned(), "upstream-req-42".to_owned());
+    headers.insert("x-codex-primary-used".to_owned(), "12".to_owned());
+    headers.insert("x-codex-primary-window".to_owned(), "60".to_owned());
+    headers.insert("x-codex-primary-reset".to_owned(), "1700000000".to_owned());
+    headers.insert("x-codex-primary-credits".to_owned(), "88".to_owned());
+    headers.insert("x-codex-secondary-used".to_owned(), "3".to_owned());
     let failure = http_failure_parts(
         429,
         &headers,
-        br#"{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef"}}"#,
+        br#"{"error":{"message":"Incorrect API key provided: sk-proj-0123456789abcdef","type":"rate_limit_error","code":"usage_limit_reached"}}"#,
         ProviderInstant::from_unix_milliseconds(1_000),
     );
     assert_eq!(failure.code(), ProviderFailureCode::RateLimited);
@@ -1798,6 +2244,166 @@ fn http_failures_are_typed_redacted_and_use_injected_time() -> Result<(), Box<dy
     );
     assert_eq!(failure.retry_after_milliseconds(), Some(2_000));
     assert!(!failure.message().contains("sk-proj-0123456789abcdef"));
+    let evidence = failure
+        .evidence()
+        .ok_or("HTTP failure evidence was discarded")?;
+    assert_eq!(evidence.body_bytes(), Some(131));
+    assert_eq!(evidence.upstream_request_id(), Some("upstream-req-42"));
+    assert_eq!(evidence.remote_error_type(), Some("rate_limit_error"));
+    assert_eq!(evidence.remote_error_code(), Some("usage_limit_reached"));
+    assert_eq!(evidence.codex_primary().and_then(|v| v.used()), Some(12));
+    assert_eq!(evidence.codex_primary().and_then(|v| v.window()), Some(60));
+    assert_eq!(
+        evidence.codex_primary().and_then(|v| v.reset()),
+        Some(1_700_000_000)
+    );
+    assert_eq!(evidence.codex_primary().and_then(|v| v.credits()), Some(88));
+    assert_eq!(evidence.codex_secondary().and_then(|v| v.used()), Some(3));
+    assert_eq!(evidence.codex_secondary().and_then(|v| v.window()), None);
+    assert_eq!(evidence.body_sha256().map(str::len), Some(64));
+    assert_eq!(
+        evidence.body_sha256(),
+        Some("e5ddb50a8360400e397de65c7f805dfa6bbbb3cb259e75817859eca42d79bd77")
+    );
+    Ok(())
+}
+
+#[test]
+fn codex_usage_limit_preserves_official_reset_and_window_evidence() {
+    let headers = BTreeMap::from([
+        (
+            "x-codex-primary-used-percent".to_owned(),
+            "100.0".to_owned(),
+        ),
+        (
+            "x-codex-primary-window-minutes".to_owned(),
+            "10080".to_owned(),
+        ),
+        ("x-should-retry".to_owned(), "false".to_owned()),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        br#"{"error":{"type":"usage_limit_reached","message":"limit","resets_at":1738888888}}"#,
+        ProviderInstant::from_unix_milliseconds(1_700_000_000_000),
+    );
+    let evidence = failure.evidence().unwrap_or_else(|| unreachable!());
+    assert_eq!(evidence.reset_at_unix_seconds(), Some(1_738_888_888));
+    assert_eq!(evidence.provider_should_retry(), Some(false));
+    let primary = evidence.codex_primary().unwrap_or_else(|| unreachable!());
+    assert_eq!(primary.used_percent_millis(), Some(100_000));
+    assert_eq!(primary.window_minutes(), Some(10_080));
+}
+
+#[test]
+fn codex_usage_limit_derives_reset_from_bounded_relative_seconds() {
+    let failure = http_failure_parts(
+        429,
+        &BTreeMap::new(),
+        br#"{"error":{"type":"usage_limit_reached","resets_in_seconds":90}}"#,
+        ProviderInstant::from_unix_milliseconds(1_700_000_000_500),
+    );
+    let evidence = failure.evidence().unwrap_or_else(|| unreachable!());
+    assert_eq!(evidence.reset_at_unix_seconds(), Some(1_700_000_090));
+}
+
+#[test]
+fn http_failure_retry_after_is_clamped_and_untrusted_fields_are_omitted() {
+    let headers = BTreeMap::from([
+        ("retry-after".to_owned(), u64::MAX.to_string()),
+        ("x-request-id".to_owned(), "unsafe request id".to_owned()),
+        ("x-codex-primary-used".to_owned(), "not-a-number".to_owned()),
+    ]);
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        br#"{"error":{"type":"unsafe type!","code":"usage_limit_reached"}}"#,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    assert_eq!(failure.retry_after_milliseconds(), Some(604_800_000));
+    let evidence = failure.evidence().unwrap_or_else(|| unreachable!());
+    assert_eq!(evidence.upstream_request_id(), None);
+    assert_eq!(evidence.remote_error_type(), None);
+    assert_eq!(evidence.remote_error_code(), Some("usage_limit_reached"));
+    assert_eq!(evidence.codex_primary(), None);
+}
+
+#[test]
+fn http_failure_remote_error_allowlist_preserves_body_evidence() {
+    let body = br#"{"error":{"type":"sk-proj-secret-token","code":"unknown_remote_code"}}"#;
+    let failure = http_failure_parts(
+        429,
+        &BTreeMap::new(),
+        body,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    let evidence = failure.evidence().unwrap_or_else(|| unreachable!());
+    assert_eq!(evidence.body_bytes(), Some(body.len() as u64));
+    assert!(evidence.body_sha256().is_some());
+    assert_eq!(evidence.remote_error_type(), None);
+    assert_eq!(evidence.remote_error_code(), None);
+}
+
+#[test]
+fn http_failure_request_id_credential_is_omitted_without_losing_safe_fields() {
+    let headers = BTreeMap::from([
+        ("x-request-id".to_owned(), "sk-proj-secret-token".to_owned()),
+        ("retry-after".to_owned(), "2".to_owned()),
+        ("x-codex-primary-used".to_owned(), "4".to_owned()),
+    ]);
+    let body = br#"{"error":{"type":"rate_limit_error","code":"usage_limit_reached"}}"#;
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        body,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    let evidence = failure.evidence().unwrap_or_else(|| unreachable!());
+    assert_eq!(evidence.upstream_request_id(), None);
+    assert_eq!(evidence.body_bytes(), Some(body.len() as u64));
+    assert!(evidence.body_sha256().is_some());
+    assert_eq!(failure.retry_after_milliseconds(), Some(2_000));
+    assert_eq!(
+        evidence.codex_primary().and_then(|value| value.used()),
+        Some(4)
+    );
+    assert_eq!(evidence.remote_error_type(), Some("rate_limit_error"));
+    assert_eq!(evidence.remote_error_code(), Some("usage_limit_reached"));
+}
+
+#[test]
+fn http_failure_evidence_survives_context_enrichment_and_legacy_serde() -> Result<(), Box<dyn Error>>
+{
+    let mut headers = BTreeMap::new();
+    headers.insert("x-request-id".to_owned(), "upstream-req".to_owned());
+    headers.insert("x-should-retry".to_owned(), "false".to_owned());
+    let failure = http_failure_parts(
+        429,
+        &headers,
+        br#"{"error":{"type":"rate_limit_error","code":"usage_limit_reached","resets_at":1738888888}}"#,
+        ProviderInstant::from_unix_milliseconds(1_000),
+    );
+    let enriched =
+        crate::execution_session::with_failure_context(failure.clone(), Some("codex route"));
+    assert_eq!(enriched.evidence(), failure.evidence());
+    let encoded = serde_json::to_vec(&failure)?;
+    let decoded: ProviderFailure = serde_json::from_slice(&encoded)?;
+    assert_eq!(decoded.evidence(), failure.evidence());
+    assert_eq!(
+        decoded
+            .evidence()
+            .and_then(|evidence| evidence.reset_at_unix_seconds()),
+        Some(1_738_888_888)
+    );
+    assert_eq!(
+        decoded
+            .evidence()
+            .and_then(|evidence| evidence.provider_should_retry()),
+        Some(false)
+    );
+    let legacy = br#"{"code":"rate_limited","message":"old","provider_status_code":429,"retry_after_milliseconds":2000,"request_id":null}"#;
+    let old: ProviderFailure = serde_json::from_slice(legacy)?;
+    assert_eq!(old.evidence(), None);
     Ok(())
 }
 

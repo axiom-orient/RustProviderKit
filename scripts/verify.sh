@@ -75,7 +75,9 @@ if ! rg -q 'ProviderRuntimeOptions|ARA_PROVIDER_KIT_CODEX_CLIENT_VERSION' README
   fail 'runtime option contract is missing from documentation'
 fi
 
-git diff --check
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git diff --check
+fi
 cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

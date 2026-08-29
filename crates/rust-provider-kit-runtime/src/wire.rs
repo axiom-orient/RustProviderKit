@@ -4,10 +4,11 @@ use http::Method;
 use rust_provider_kit_core::{
     CapabilitySupport, ProviderCapabilities, ProviderCompletion, ProviderContinuation,
     ProviderCoreError, ProviderCredentialLease, ProviderCredentialMaterial, ProviderFailure,
-    ProviderFailureCode, ProviderInstant, ProviderJsonValue, ProviderModelCatalogResult,
-    ProviderModelDescriptor, ProviderModelId, ProviderNativeState, ProviderRequestConstraints,
-    ProviderToolCall, ProviderUsage,
+    ProviderFailureCode, ProviderFailureEvidence, ProviderInstant, ProviderJsonValue,
+    ProviderModelCatalogResult, ProviderModelDescriptor, ProviderModelId, ProviderNativeState,
+    ProviderRateLimitEvidence, ProviderRequestConstraints, ProviderToolCall, ProviderUsage,
 };
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::http_transport::{
@@ -180,6 +181,10 @@ pub(crate) fn optional_nonnegative_u64(
     const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
     match value {
         None | Some(ProviderJsonValue::Null) => Ok(None),
+        Some(ProviderJsonValue::Integer(number)) if *number >= 0 => Ok(Some(*number as u64)),
+        Some(ProviderJsonValue::UnsignedInteger(number)) if *number <= i64::MAX as u64 => {
+            Ok(Some(*number))
+        }
         Some(ProviderJsonValue::Number(number))
             if number.is_finite()
                 && *number >= 0.0
@@ -315,21 +320,10 @@ pub(crate) fn http_failure(
 pub(crate) fn http_failure_parts(
     status: u16,
     headers: &BTreeMap<String, String>,
-    _body: &[u8],
+    body: &[u8],
     now: ProviderInstant,
 ) -> ProviderFailure {
-    let code = match status {
-        400 => ProviderFailureCode::InvalidRequest,
-        401 => ProviderFailureCode::AuthenticationFailed,
-        403 => ProviderFailureCode::PermissionDenied,
-        404 => ProviderFailureCode::ModelUnavailable,
-        402 => ProviderFailureCode::BillingUnavailable,
-        408 | 504 => ProviderFailureCode::TimedOut,
-        409 | 422 => ProviderFailureCode::InvalidRequest,
-        429 => ProviderFailureCode::RateLimited,
-        500..=599 => ProviderFailureCode::ServerFailed,
-        _ => ProviderFailureCode::TransportFailed,
-    };
+    let code = failure_code_for_status(status);
     let message = format!("provider HTTP request failed with status {status}");
     let mut failure = match ProviderFailure::new(code, message).with_status(status) {
         Ok(value) => value,
@@ -338,24 +332,572 @@ pub(crate) fn http_failure_parts(
             "provider returned an invalid HTTP status",
         ),
     };
-    if let Some(value) = headers
-        .get("retry-after")
-        .and_then(|value| retry_after_milliseconds(value, now))
-    {
+    if let Some(value) = retry_after_from_headers(headers, Some(now)) {
         failure = failure.with_retry_after(value);
+    }
+    if let Some(evidence) = http_failure_evidence(headers, body, Some(now)) {
+        failure = failure.with_evidence(evidence);
     }
     failure
 }
+
+pub(crate) fn provider_stream_failure(
+    body: &[u8],
+    fallback_code: ProviderFailureCode,
+    message: &'static str,
+) -> ProviderFailure {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return ProviderFailure::new(fallback_code, message);
+    };
+    let headers = embedded_failure_headers(&value);
+    let status = stream_failure_status(&value);
+    let (remote_type, remote_code) = failure_remote_tokens(&value);
+    let code = status.map(failure_code_for_status).unwrap_or_else(|| {
+        failure_code_for_remote_tokens(remote_type.as_deref(), remote_code.as_deref())
+            .unwrap_or(fallback_code)
+    });
+    let mut failure = ProviderFailure::new(code, message);
+    if let Some(status) = status {
+        failure = match failure.with_status(status) {
+            Ok(value) => value,
+            Err(_) => {
+                return ProviderFailure::new(
+                    ProviderFailureCode::InternalInvariant,
+                    "provider stream contained an invalid HTTP status",
+                );
+            }
+        };
+    }
+    if let Some(delay) = retry_after_from_headers(&headers, None)
+        .or_else(|| relative_reset_delay_milliseconds(&value))
+    {
+        failure = failure.with_retry_after(delay);
+    }
+    if let Some(evidence) = http_failure_evidence(&headers, body, None) {
+        failure = failure.with_evidence(evidence);
+    }
+    failure
+}
+
+fn failure_code_for_status(status: u16) -> ProviderFailureCode {
+    match status {
+        400 | 409 | 422 => ProviderFailureCode::InvalidRequest,
+        401 => ProviderFailureCode::AuthenticationFailed,
+        402 => ProviderFailureCode::BillingUnavailable,
+        403 => ProviderFailureCode::PermissionDenied,
+        404 => ProviderFailureCode::ModelUnavailable,
+        408 | 504 => ProviderFailureCode::TimedOut,
+        429 => ProviderFailureCode::RateLimited,
+        500..=599 => ProviderFailureCode::ServerFailed,
+        _ => ProviderFailureCode::TransportFailed,
+    }
+}
+
+const MAX_RETRY_AFTER_MILLISECONDS: u64 = 7 * 24 * 60 * 60 * 1_000;
+const MAX_SAFE_LIMIT_VALUE: u64 = i64::MAX as u64;
+
+fn http_failure_evidence(
+    headers: &BTreeMap<String, String>,
+    body: &[u8],
+    now: Option<ProviderInstant>,
+) -> Option<ProviderFailureEvidence> {
+    let mut digest = Sha256::new();
+    digest.update(body);
+    let body_sha256 = format!("{:x}", digest.finalize());
+    let mut evidence =
+        ProviderFailureEvidence::new(u64::try_from(body.len()).ok()?, body_sha256).ok()?;
+    if let Some(request_id) = header_value(headers, "x-request-id")
+        .or_else(|| header_value(headers, "request-id"))
+        .or_else(|| header_value(headers, "x-goog-request-id"))
+        .and_then(safe_request_id)
+    {
+        evidence = evidence.with_upstream_request_id(request_id).ok()?;
+    }
+    if let Some(should_retry) =
+        header_value(headers, "x-should-retry").and_then(|value| {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            }
+        })
+    {
+        evidence = evidence.with_provider_should_retry(should_retry);
+    }
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        let (error_type, error_code) = failure_remote_tokens(&value);
+        if let Some(error_type) = error_type {
+            evidence = evidence.with_remote_error_type(error_type).ok()?;
+        }
+        if let Some(error_code) = error_code {
+            evidence = evidence.with_remote_error_code(error_code).ok()?;
+        }
+        let reset_at = provider_reset_at(&value, now);
+        if let Some(reset_at) = reset_at {
+            evidence = evidence.with_reset_at_unix_seconds(reset_at).ok()?;
+        }
+    }
+    if let Some(value) = codex_limit(headers, "primary") {
+        evidence = evidence.with_codex_primary(value);
+    }
+    if let Some(value) = codex_limit(headers, "secondary") {
+        evidence = evidence.with_codex_secondary(value);
+    }
+    Some(evidence)
+}
+
+fn failure_objects(
+    value: &serde_json::Value,
+) -> [Option<&serde_json::Map<String, serde_json::Value>>; 3] {
+    let top = value.as_object();
+    let response = top
+        .and_then(|object| object.get("response"))
+        .and_then(serde_json::Value::as_object);
+    let error = top
+        .and_then(|object| object.get("error"))
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| {
+            response
+                .and_then(|object| object.get("error"))
+                .and_then(serde_json::Value::as_object)
+        });
+    [error, response, top]
+}
+
+fn failure_remote_tokens(value: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let objects = failure_objects(value);
+    let token = |key: &str| {
+        objects.iter().flatten().find_map(|object| {
+            object
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .and_then(safe_remote_error_token)
+        })
+    };
+    (token("type"), token("code"))
+}
+
+fn provider_reset_at(value: &serde_json::Value, now: Option<ProviderInstant>) -> Option<u64> {
+    let objects = failure_objects(value);
+    let absolute = || {
+        objects.iter().flatten().find_map(|object| {
+            object
+                .get("resets_at")
+                .or_else(|| object.get("reset_at"))
+                .and_then(serde_json::Value::as_u64)
+        })
+    };
+    if let Some(value) = absolute().filter(|value| *value <= i64::MAX as u64) {
+        return Some(value);
+    }
+    let relative = || {
+        objects.iter().flatten().find_map(|object| {
+            object
+                .get("resets_in_seconds")
+                .or_else(|| object.get("reset_in_seconds"))
+                .and_then(serde_json::Value::as_u64)
+        })
+    };
+    let now = now?;
+    let now_seconds = u64::try_from(now.as_unix_milliseconds().div_euclid(1_000)).ok()?;
+    now_seconds
+        .checked_add(relative()?)
+        .filter(|value| *value <= i64::MAX as u64)
+}
+
+fn relative_reset_delay_milliseconds(value: &serde_json::Value) -> Option<u64> {
+    failure_objects(value)
+        .iter()
+        .flatten()
+        .find_map(|object| {
+            object
+                .get("resets_in_seconds")
+                .or_else(|| object.get("reset_in_seconds"))
+                .and_then(serde_json::Value::as_u64)
+        })
+        .and_then(|seconds| seconds.checked_mul(1_000))
+        .map(|milliseconds| milliseconds.min(MAX_RETRY_AFTER_MILLISECONDS))
+}
+
+fn stream_failure_status(value: &serde_json::Value) -> Option<u16> {
+    failure_objects(value)
+        .iter()
+        .flatten()
+        .find_map(|object| {
+            ["status", "status_code", "code"]
+                .into_iter()
+                .find_map(|key| object.get(key).and_then(serde_json::Value::as_u64))
+        })
+        .and_then(|status| u16::try_from(status).ok())
+        .filter(|status| (400..=599).contains(status))
+}
+
+fn failure_code_for_remote_tokens(
+    error_type: Option<&str>,
+    error_code: Option<&str>,
+) -> Option<ProviderFailureCode> {
+    let has = |candidates: &[&str]| {
+        candidates
+            .iter()
+            .any(|candidate| error_type == Some(*candidate) || error_code == Some(*candidate))
+    };
+    if has(&[
+        "rate_limit_error",
+        "rate_limit_reached",
+        "rate_limit_exceeded",
+        "usage_limit_reached",
+    ]) {
+        Some(ProviderFailureCode::RateLimited)
+    } else if has(&["authentication_error", "invalid_api_key"]) {
+        Some(ProviderFailureCode::AuthenticationFailed)
+    } else if has(&["permission_error"]) {
+        Some(ProviderFailureCode::PermissionDenied)
+    } else if has(&[
+        "billing_hard_limit_reached",
+        "billing_error",
+        "insufficient_quota",
+        "quota_exceeded",
+    ]) {
+        Some(ProviderFailureCode::BillingUnavailable)
+    } else if has(&["model_not_found"]) {
+        Some(ProviderFailureCode::ModelUnavailable)
+    } else if has(&[
+        "invalid_request",
+        "invalid_request_error",
+        "context_length_exceeded",
+    ]) {
+        Some(ProviderFailureCode::InvalidRequest)
+    } else if has(&["overloaded_error", "server_error", "service_unavailable"]) {
+        Some(ProviderFailureCode::ServerFailed)
+    } else {
+        None
+    }
+}
+
+fn embedded_failure_headers(value: &serde_json::Value) -> BTreeMap<String, String> {
+    let header_object = value
+        .as_object()
+        .and_then(|object| object.get("headers"))
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|object| object.get("headers"))
+                .and_then(serde_json::Value::as_object)
+        });
+    header_object
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .filter_map(|(key, value)| {
+            let value = match value {
+                serde_json::Value::String(value) => value.clone(),
+                serde_json::Value::Number(value) => value.to_string(),
+                serde_json::Value::Bool(value) => value.to_string(),
+                _ => return None,
+            };
+            Some((key.clone(), value))
+        })
+        .collect()
+}
+
+fn retry_after_from_headers(
+    headers: &BTreeMap<String, String>,
+    now: Option<ProviderInstant>,
+) -> Option<u64> {
+    header_value(headers, "retry-after-ms")
+        .and_then(retry_after_millisecond_value)
+        .or_else(|| {
+            let value = header_value(headers, "retry-after")?;
+            retry_after_seconds_value(value)
+                .or_else(|| now.and_then(|now| retry_after_milliseconds(value, now)))
+        })
+        .or_else(|| rate_limit_reset_delay_milliseconds(headers))
+}
+
+fn rate_limit_reset_delay_milliseconds(headers: &BTreeMap<String, String>) -> Option<u64> {
+    let dimensions = ["requests", "tokens", "project-tokens"];
+    let exhausted = dimensions.into_iter().filter_map(|dimension| {
+        let remaining = header_value(headers, &format!("x-ratelimit-remaining-{dimension}"))?
+            .trim()
+            .parse::<u128>()
+            .ok()?;
+        (remaining == 0).then_some(dimension)
+    });
+    let resets = |dimensions: &mut dyn Iterator<Item = &str>| {
+        dimensions
+            .filter_map(|dimension| {
+                header_value(headers, &format!("x-ratelimit-reset-{dimension}"))
+                    .and_then(rate_limit_duration_milliseconds)
+            })
+            .max()
+    };
+    let mut exhausted = exhausted.peekable();
+    if exhausted.peek().is_some() {
+        return resets(&mut exhausted);
+    }
+    let mut all = dimensions.into_iter();
+    resets(&mut all)
+}
+
+fn rate_limit_duration_milliseconds(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 64 {
+        return None;
+    }
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return retry_after_seconds_value(value);
+    }
+
+    let bytes = value.as_bytes();
+    let mut offset = 0usize;
+    let mut total = 0u128;
+    while offset < bytes.len() {
+        let start = offset;
+        let mut dot = None;
+        while offset < bytes.len() && (bytes[offset].is_ascii_digit() || bytes[offset] == b'.') {
+            if bytes[offset] == b'.' && dot.replace(offset).is_some() {
+                return None;
+            }
+            offset += 1;
+        }
+        if offset == start || bytes[start] == b'.' || bytes[offset - 1] == b'.' {
+            return None;
+        }
+        let number_end = offset;
+        let unit_milliseconds = if bytes.get(offset..offset + 2) == Some(b"ms") {
+            offset += 2;
+            1u128
+        } else {
+            let unit = *bytes.get(offset)?;
+            offset += 1;
+            match unit {
+                b's' => 1_000,
+                b'm' => 60_000,
+                b'h' => 3_600_000,
+                _ => return None,
+            }
+        };
+        let (whole, fraction) = match dot {
+            Some(dot) => (&value[start..dot], &value[dot + 1..number_end]),
+            None => (&value[start..number_end], ""),
+        };
+        if fraction.len() > 3 {
+            return None;
+        }
+        let whole = whole.parse::<u128>().ok()?;
+        let fraction = if fraction.is_empty() {
+            0
+        } else {
+            fraction.parse::<u128>().ok()?
+                * 10_u128.pow(u32::try_from(3_usize.checked_sub(fraction.len())?).ok()?)
+        };
+        total = total
+            .saturating_add(whole.saturating_mul(unit_milliseconds))
+            .saturating_add(fraction.saturating_mul(unit_milliseconds) / 1_000)
+            .min(u128::from(MAX_RETRY_AFTER_MILLISECONDS));
+    }
+    u64::try_from(total).ok().filter(|value| *value > 0)
+}
+
+fn header_value<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn safe_evidence_token(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+fn safe_request_id(value: &str) -> Option<String> {
+    let original = value;
+    let value = value.trim();
+    if original != value {
+        return None;
+    }
+    let value = safe_evidence_token(value)?;
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("sk-")
+        || lower.starts_with("sk_")
+        || lower.starts_with("bearer")
+        || is_jwt_like_request_id(&value)
+        || !(lower.starts_with("req_")
+            || lower.starts_with("req-")
+            || lower.starts_with("request")
+            || lower.starts_with("upstream-req"))
+    {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn is_jwt_like_request_id(value: &str) -> bool {
+    let mut segments = value.split('.');
+    let (Some(first), Some(second), Some(third), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    !first.is_empty()
+        && !second.is_empty()
+        && !third.is_empty()
+        && [first, second, third].into_iter().all(|segment| {
+            segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+}
+
+fn safe_remote_error_token(value: &str) -> Option<String> {
+    let value = safe_evidence_token(value)?;
+    const ALLOWLIST: &[&str] = &[
+        "authentication_error",
+        "billing_hard_limit_reached",
+        "billing_error",
+        "context_length_exceeded",
+        "insufficient_quota",
+        "invalid_request",
+        "invalid_request_error",
+        "invalid_api_key",
+        "model_not_found",
+        "overloaded_error",
+        "permission_error",
+        "quota_exceeded",
+        "rate_limit_error",
+        "rate_limit_reached",
+        "rate_limit_exceeded",
+        "server_error",
+        "service_unavailable",
+        "usage_limit_reached",
+    ];
+    ALLOWLIST.contains(&value.as_str()).then_some(value)
+}
+
+fn codex_limit(
+    headers: &BTreeMap<String, String>,
+    side: &str,
+) -> Option<ProviderRateLimitEvidence> {
+    let field = |name: &str| {
+        header_value(headers, &format!("x-codex-{side}-{name}"))
+            .and_then(|value| value.trim().parse::<u128>().ok())
+            .map(|value| value.min(u128::from(MAX_SAFE_LIMIT_VALUE)) as u64)
+    };
+    let mut value = ProviderRateLimitEvidence::new(
+        field("used"),
+        field("window"),
+        field("reset"),
+        field("credits"),
+    )
+    .ok()?;
+    if let Some(used_percent) = header_value(headers, &format!("x-codex-{side}-used-percent"))
+        .and_then(parse_percent_millis)
+    {
+        value = value.with_used_percent_millis(used_percent).ok()?;
+    }
+    if let Some(window_minutes) = header_value(headers, &format!("x-codex-{side}-window-minutes"))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value <= i64::MAX as u64)
+    {
+        value = value.with_window_minutes(window_minutes).ok()?;
+    }
+    if value.used().is_none()
+        && value.window().is_none()
+        && value.reset().is_none()
+        && value.credits().is_none()
+        && value.used_percent_millis().is_none()
+        && value.window_minutes().is_none()
+    {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn parse_percent_millis(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || fraction.len() > 3
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.parse::<u64>().ok()?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u64>().ok()? * 10_u64.pow(u32::try_from(3 - fraction.len()).ok()?)
+    };
+    whole
+        .checked_mul(1_000)
+        .and_then(|value| value.checked_add(fraction))
+        .filter(|value| *value <= 100_000)
+}
 fn retry_after_milliseconds(value: &str, now: ProviderInstant) -> Option<u64> {
-    if let Ok(seconds) = value.trim().parse::<u64>() {
-        return seconds.checked_mul(1_000);
+    if let Some(milliseconds) = retry_after_seconds_value(value) {
+        return Some(milliseconds);
     }
     let date = httpdate::parse_http_date(value).ok()?;
     let instant = ProviderInstant::from_system_time(date).ok()?;
     let delta = instant
         .as_unix_milliseconds()
         .saturating_sub(now.as_unix_milliseconds());
-    u64::try_from(delta.max(0)).ok()
+    u64::try_from(delta.max(0))
+        .ok()
+        .map(|value| value.min(MAX_RETRY_AFTER_MILLISECONDS))
+}
+
+fn retry_after_millisecond_value(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u128>()
+        .ok()
+        .map(|value| value.min(u128::from(MAX_RETRY_AFTER_MILLISECONDS)) as u64)
+}
+
+fn retry_after_seconds_value(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || fraction.len() > 3
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.parse::<u128>().ok()?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u128>().ok()?
+            * 10_u128.pow(u32::try_from(3_usize.checked_sub(fraction.len())?).ok()?)
+    };
+    whole
+        .saturating_mul(1_000)
+        .saturating_add(fraction)
+        .min(u128::from(MAX_RETRY_AFTER_MILLISECONDS))
+        .try_into()
+        .ok()
 }
 
 pub(crate) fn parse_model_catalog(

@@ -20,8 +20,8 @@ use crate::sse::ServerSentEvent;
 use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, append_path, array, core_error_failure,
     http_failure, json_to_serde, make_json_request, merge_account_headers,
-    optional_nonnegative_u64, optional_string, require_api_key, serde_to_json, tool_result_text,
-    transport_failure, usage,
+    optional_nonnegative_u64, optional_string, provider_stream_failure, require_api_key,
+    serde_to_json, tool_result_text, transport_failure, usage,
 };
 
 const NATIVE_STATE_FORMAT: &str = "google.generate-content.parts.v1";
@@ -295,7 +295,7 @@ impl GeminiGenerateContentAdapter {
                     "thinkingConfig".into(),
                     json!({
                         "includeThoughts":true,
-                        "thinkingLevel":format!("{effort:?}").to_ascii_lowercase()
+                        "thinkingLevel":effort.as_str()
                     }),
                 );
             }
@@ -478,7 +478,8 @@ impl ProviderStreamDecoder for GeminiGenerateContentStreamDecoder {
         let root = ProviderJsonValue::decode(event.data.as_bytes())
             .map_err(|_| malformed("Gemini stream JSON is malformed"))?;
         if root.get("error").is_some() {
-            return Err(ProviderFailure::new(
+            return Err(provider_stream_failure(
+                event.data.as_bytes(),
                 ProviderFailureCode::ServerFailed,
                 "Gemini stream failed",
             ));
@@ -517,6 +518,9 @@ impl ProviderStreamDecoder for GeminiGenerateContentStreamDecoder {
                             }
                         }
                         if let Some(function_call) = part.get("functionCall") {
+                            if self.emitted_tool_count >= ProviderTurnRequest::MAXIMUM_TOOLS {
+                                return Err(malformed("Gemini stream exceeded tool-call limit"));
+                            }
                             let name = function_call
                                 .get("name")
                                 .and_then(ProviderJsonValue::as_str)

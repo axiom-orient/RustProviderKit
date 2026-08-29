@@ -22,9 +22,9 @@ use crate::sse::ServerSentEvent;
 use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     core_error_failure, default_capabilities, http_failure, json_to_serde, make_json_request,
-    merge_account_headers, optional_nonnegative_u64, parse_model_catalog, require_api_key,
-    require_server_side_continuation_opt_in, serde_to_json, stores_server_side_response,
-    tool_result_text, transport_failure, usage,
+    malformed, merge_account_headers, optional_nonnegative_u64, parse_model_catalog,
+    provider_stream_failure, require_api_key, require_server_side_continuation_opt_in,
+    serde_to_json, stores_server_side_response, tool_result_text, transport_failure, usage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,10 +271,7 @@ impl OpenAiResponsesAdapter {
                 ));
             }
             ProviderReasoningPolicy::Effort(effort) => {
-                body.insert(
-                    "reasoning".into(),
-                    json!({"effort":format!("{effort:?}").to_ascii_lowercase()}),
-                );
+                body.insert("reasoning".into(), json!({"effort":effort.as_str()}));
             }
         }
         if self.supports_server_side_continuation()
@@ -576,39 +573,50 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
             .or(event.event.as_deref());
         match event_type {
             Some("response.created" | "response.in_progress") => {
-                if let Some(id) = root
+                let id = root
                     .at(&["response", "id"])
                     .and_then(ProviderJsonValue::as_str)
-                {
-                    self.response_id = Some(id.to_owned());
-                }
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| malformed("Responses lifecycle event has no response ID"))?;
+                self.response_id = Some(id.to_owned());
                 Ok(Vec::new())
             }
-            Some("response.output_text.delta") => Ok(root
-                .get("delta")
-                .and_then(ProviderJsonValue::as_str)
-                .filter(|value| !value.is_empty())
-                .map(|value| vec![ProviderDecodedEvent::Text(value.to_owned())])
-                .unwrap_or_default()),
+            Some("response.output_text.delta") => {
+                let value = root
+                    .get("delta")
+                    .and_then(ProviderJsonValue::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| malformed("Responses text delta has no text"))?;
+                Ok(vec![ProviderDecodedEvent::Text(value.to_owned())])
+            }
             // The reasoning text delta is provider-private chain-of-thought,
             // not the displayable summary contract exposed by ProviderKit.
-            Some("response.reasoning_text.delta") => Ok(Vec::new()),
-            Some("response.reasoning_summary_text.delta") => Ok(root
-                .get("delta")
-                .and_then(ProviderJsonValue::as_str)
-                .filter(|value| !value.is_empty())
-                .map(|value| vec![ProviderDecodedEvent::Reasoning(value.to_owned())])
-                .unwrap_or_default()),
+            Some("response.reasoning_text.delta") => {
+                let _ = root
+                    .get("delta")
+                    .and_then(ProviderJsonValue::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| malformed("Responses private reasoning delta has no text"))?;
+                Ok(Vec::new())
+            }
+            Some("response.reasoning_summary_text.delta") => {
+                let value = root
+                    .get("delta")
+                    .and_then(ProviderJsonValue::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| malformed("Responses reasoning delta has no text"))?;
+                Ok(vec![ProviderDecodedEvent::Reasoning(value.to_owned())])
+            }
             Some("response.output_item.added") => {
-                if root
+                let item_type = root
                     .at(&["item", "type"])
                     .and_then(ProviderJsonValue::as_str)
-                    != Some("function_call")
-                {
+                    .ok_or_else(|| malformed("Responses output item has no type"))?;
+                if item_type != "function_call" {
                     return Ok(Vec::new());
                 }
                 let key = tool_key(&root, self.tools.len())?;
-                let state = self.tools.entry(key).or_default();
+                let state = self.tool_state(key)?;
                 if let Some(value) = root
                     .at(&["item", "call_id"])
                     .and_then(ProviderJsonValue::as_str)
@@ -632,33 +640,31 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
             }
             Some("response.function_call_arguments.delta") => {
                 let key = tool_key(&root, 0)?;
-                let state = self.tools.entry(key).or_default();
-                if let Some(value) = root.get("delta").and_then(ProviderJsonValue::as_str) {
-                    state.arguments.append(value)?;
-                }
+                let state = self.tool_state(key)?;
+                let value = root
+                    .get("delta")
+                    .and_then(ProviderJsonValue::as_str)
+                    .ok_or_else(|| malformed("Responses tool argument delta has no text"))?;
+                state.arguments.append(value)?;
                 Ok(Vec::new())
             }
             Some("response.function_call_arguments.done") => {
                 let key = tool_key(&root, 0)?;
                 if let Some(value) = root.get("arguments").and_then(ProviderJsonValue::as_str) {
-                    self.tools
-                        .entry(key.clone())
-                        .or_default()
-                        .arguments
-                        .replace(value)?;
+                    self.tool_state(key.clone())?.arguments.replace(value)?;
                 }
                 self.emit_tool(&key)
             }
             Some("response.output_item.done") => {
-                if root
+                let item_type = root
                     .at(&["item", "type"])
                     .and_then(ProviderJsonValue::as_str)
-                    != Some("function_call")
-                {
+                    .ok_or_else(|| malformed("Responses output item has no type"))?;
+                if item_type != "function_call" {
                     return Ok(Vec::new());
                 }
                 let key = tool_key(&root, 0)?;
-                let state = self.tools.entry(key.clone()).or_default();
+                let state = self.tool_state(key.clone())?;
                 if let Some(value) = root
                     .at(&["item", "call_id"])
                     .and_then(ProviderJsonValue::as_str)
@@ -686,12 +692,10 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
                         "provider emitted duplicate completion",
                     ));
                 }
-                let response = root.get("response").unwrap_or(&root);
-                if response
-                    .get("status")
-                    .and_then(ProviderJsonValue::as_str)
-                    .is_some_and(|status| status != "completed")
-                {
+                let response = root
+                    .get("response")
+                    .ok_or_else(|| malformed("Responses completion has no response object"))?;
+                if response.get("status").and_then(ProviderJsonValue::as_str) != Some("completed") {
                     return Err(ProviderFailure::new(
                         ProviderFailureCode::MalformedResponse,
                         "provider emitted response.completed with unsuccessful status",
@@ -745,7 +749,8 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
                     },
                 )])
             }
-            Some("response.failed" | "error") => Err(ProviderFailure::new(
+            Some("response.failed" | "error") => Err(provider_stream_failure(
+                event.data.as_bytes(),
                 ProviderFailureCode::ServerFailed,
                 "provider stream failed",
             )),
@@ -776,6 +781,17 @@ impl ProviderStreamDecoder for OpenAiResponsesStreamDecoder {
     }
 }
 impl OpenAiResponsesStreamDecoder {
+    fn tool_state(&mut self, key: String) -> Result<&mut ResponsesToolState, ProviderFailure> {
+        if !self.tools.contains_key(&key) && self.tools.len() >= ProviderTurnRequest::MAXIMUM_TOOLS
+        {
+            return Err(ProviderFailure::new(
+                ProviderFailureCode::MalformedResponse,
+                "Responses stream exceeded tool-call state limit",
+            ));
+        }
+        Ok(self.tools.entry(key).or_default())
+    }
+
     fn emit_tool(&mut self, key: &str) -> Result<Vec<ProviderDecodedEvent>, ProviderFailure> {
         let state = self.tools.get_mut(key).ok_or_else(|| {
             ProviderFailure::new(
@@ -786,16 +802,12 @@ impl OpenAiResponsesStreamDecoder {
         if state.emitted {
             return Ok(Vec::new());
         }
-        let call_id = state
-            .call_id
-            .as_deref()
-            .or_else(|| (!key.starts_with("index:")).then_some(key))
-            .ok_or_else(|| {
-                ProviderFailure::new(
-                    ProviderFailureCode::MalformedResponse,
-                    "provider tool call is missing its identity",
-                )
-            })?;
+        let call_id = state.call_id.as_deref().ok_or_else(|| {
+            ProviderFailure::new(
+                ProviderFailureCode::MalformedResponse,
+                "provider tool call is missing its identity",
+            )
+        })?;
         let name = state.name.as_deref().ok_or_else(|| {
             ProviderFailure::new(
                 ProviderFailureCode::MalformedResponse,

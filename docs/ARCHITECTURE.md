@@ -27,11 +27,23 @@ Cargo 의존 방향은 `runtime → core ← platform`이다. Runtime과 Platfor
 
 | Crate | 공개 계약 | 내부 구현 |
 |---|---|---|
+| `rgxamk-native-provider` | RGXAMK Codex provider process boundary | strict argv/JSON adapter, private ephemeral credential store, event accumulator |
 | Core | 값 타입, 오류·이벤트·terminal, reducer, vault/clock/authorization port, bounded stream | mailbox state와 기본 clock |
 | Runtime | `ProviderRuntime`, `OpenRouterOAuthRegistrationRequest` | adapters, HTTP/SSE, supervisors, sessions, registry, OAuth broker |
 | Platform | PKCE generator, loopback session/prepared request | browser opener, callback parser/scanner, socket lifecycle |
 
 Production module은 crate-root 내부 re-export hub를 경유하지 않고 소유 모듈을 직접 참조한다. 내부 characterization test는 crate unit test, 외부 계약 test는 public API integration test로 분리한다.
+
+The native provider leaf is deliberately outside runtime ownership. It consumes the
+product's current `rgx.agent.provider-request.v3` envelope, builds one immutable
+Codex `ProviderTurnRequest`, and accepts one named `rgxamk_action` tool call only.
+Registration owns a private process-lifetime credential store and checks the active
+lease after the runtime's stage→verify→activate→read-back terminal. The leaf then
+shuts the runtime down and joins cleanup before writing its single success line;
+actions remain caller-owned and are never executed here. The leaf's
+`--operation-timeout-ms` is a total registration/read-back/execute/normal-shutdown
+deadline. A turn timeout is derived from the remaining budget, and a fixed
+10,000ms shutdown reserve is used only when the work deadline expires.
 
 ## 3. Core의 실제 순도 경계
 
@@ -100,7 +112,6 @@ SSE `id`와 `retry`는 reconnect를 하지 않는 one-shot transport에서 소�
 지원 dialect:
 
 - OpenAI Responses: Codex, OpenAI
-- Anthropic Messages: Anthropic, MiniMax
 - Gemini GenerateContent: Gemini
 - OpenAI-compatible Chat: OpenRouter, DeepSeek, Qwen, Kimi
 - Anthropic-compatible Messages: Anthropic, MiniMax, Z.AI
@@ -132,10 +143,19 @@ Listener를 먼저 bind한 뒤 browser를 연다. request bytes, connection coun
 | compensation 실패 | `CredentialRecoveryRequired` | 호출자에게 명시적 수동 복구 요구 |
 | HTTP malformed/oversize/backpressure | failed terminal | transport cancel + join |
 | timeout | `TimedOut` failure | cancellation과 의미 분리 |
-| visible output 전 transient failure | bounded same-route retry | route 변경 없음 |
+| visible output 전 transient HTTP/stream failure | bounded same-route retry | route 변경 없음 |
+| 장기 usage-window 429 또는 reset delay > 60초 | `wait_until_reset` typed failure | process가 장시간 sleep하거나 hot-loop하지 않음 |
+| auth/billing/permission/insufficient quota | `user_action` typed failure | 자동 logout·credential·plan·credit·결제 side effect 없음 |
 | visible output 후 failure | terminal failure | 중복 출력 방지를 위해 retry 없음 |
 | revoke 실패 | typed failure | admission block을 복원해 기존 account 사용 가능 |
 | worker panic/abort | internal-invariant terminal | completion watch와 emergency sink |
+
+HTTP status가 성공이어도 Responses/Chat/Messages/GenerateContent stream 안의 error event가
+429·usage limit·overload를 운반할 수 있습니다. 각 decoder는 원문 message를 공개하지 않고
+status, allowlisted type/code, body digest, request ID, reset 및 bounded rate-limit 수치만 공통
+failure evidence로 바꿉니다. `Retry-After`가 없을 때만 OpenAI
+`x-ratelimit-reset-requests`/`x-ratelimit-reset-tokens`/project-token reset을 사용하며, exhausted dimension이
+명시되면 그 dimension만, 없으면 관찰된 reset 중 가장 긴 값을 선택합니다.
 
 ## 11. 의도적으로 유지한 큰 authority
 

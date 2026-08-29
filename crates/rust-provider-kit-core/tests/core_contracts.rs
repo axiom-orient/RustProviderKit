@@ -122,6 +122,25 @@ fn json_to_serde_preserves_integral_number_shape() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
+fn json_preserves_full_width_integers() -> Result<(), Box<dyn Error>> {
+    let signed = i64::MAX;
+    let unsigned = u64::MAX;
+    let value = json_object([
+        ("signed", ProviderJsonValue::from(signed)),
+        (
+            "unsigned",
+            ProviderJsonValue::decode(unsigned.to_string().as_bytes())?,
+        ),
+    ]);
+    assert_eq!(
+        value.encoded_vec()?,
+        format!(r#"{{"signed":{signed},"unsigned":{unsigned}}}"#).into_bytes()
+    );
+    assert_eq!(ProviderJsonValue::decode(&value.encoded_vec()?)?, value);
+    Ok(())
+}
+
+#[test]
 fn tool_history_preserves_call_identity_and_error_status() -> Result<(), Box<dyn Error>> {
     let call = ProviderToolCall::new(
         "call-1",

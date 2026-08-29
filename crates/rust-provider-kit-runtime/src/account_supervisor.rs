@@ -51,10 +51,10 @@ pub(crate) struct RegistrationControl {
 }
 
 impl RegistrationControl {
-    fn new() -> Self {
+    fn new(cancellation: CancellationToken) -> Self {
         let (finished, _receiver) = watch::channel(false);
         Self {
-            cancellation: CancellationToken::new(),
+            cancellation,
             finished,
         }
     }
@@ -217,9 +217,18 @@ impl ProviderAccountSupervisor {
         &self,
         request: ProviderAccountRegistrationRequest,
     ) -> ProviderAccountEventStream {
+        self.register_with_cancellation(request, CancellationToken::new())
+            .await
+    }
+
+    pub(crate) async fn register_with_cancellation(
+        &self,
+        request: ProviderAccountRegistrationRequest,
+        cancellation: CancellationToken,
+    ) -> ProviderAccountEventStream {
         let (stream, sink) = ProviderAccountEventStream::with_defaults();
         let registration_id = Uuid::new_v4();
-        let control = Arc::new(RegistrationControl::new());
+        let control = Arc::new(RegistrationControl::new(cancellation));
         {
             let mut state = self.inner.state.lock();
             if state.shutting_down {
@@ -244,6 +253,13 @@ impl ProviderAccountSupervisor {
                 let _ = sink.send(ProviderAccountPublicEvent::Failed(ProviderFailure::new(
                     ProviderFailureCode::InvalidRequest,
                     "provider account registration is already active",
+                )));
+                return stream;
+            }
+            if control.cancellation.is_cancelled() {
+                let _ = sink.send(ProviderAccountPublicEvent::Failed(ProviderFailure::new(
+                    ProviderFailureCode::Cancelled,
+                    "provider account registration was cancelled",
                 )));
                 return stream;
             }
@@ -481,11 +497,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use super::RegistrationControl;
+    use super::{CancellationToken, RegistrationControl};
 
     #[tokio::test]
     async fn registration_completion_signal_releases_late_waiters() {
-        let control = Arc::new(RegistrationControl::new());
+        let control = Arc::new(RegistrationControl::new(CancellationToken::new()));
         control.mark_finished();
         let left = Arc::clone(&control);
         let right = Arc::clone(&control);

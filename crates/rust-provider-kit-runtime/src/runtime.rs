@@ -10,6 +10,7 @@ use rust_provider_kit_core::{
     ProviderModelCatalogResult, ProviderRequestId, ProviderTurnRequest, SystemProviderClock,
 };
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::account_supervisor::ProviderAccountSupervisor;
 use crate::execution_supervisor::ProviderExecutionSupervisor;
@@ -33,6 +34,7 @@ struct RuntimeState {
     active_registration_controls: usize,
     reconciling_credentials: bool,
     revoking_accounts: HashSet<ProviderAccountId>,
+    oauth_cancellations: HashMap<ProviderAccountId, CancellationToken>,
     consumed_oauth_states: OAuthStateReplayWindow,
 }
 
@@ -142,6 +144,7 @@ impl ProviderRuntime {
                     active_registration_controls: 0,
                     reconciling_credentials: false,
                     revoking_accounts: HashSet::new(),
+                    oauth_cancellations: HashMap::new(),
                     consumed_oauth_states: OAuthStateReplayWindow::new(4_096).map_err(|_| {
                         ProviderFailure::new(
                             ProviderFailureCode::InternalInvariant,
@@ -189,6 +192,16 @@ impl ProviderRuntime {
     }
 
     pub async fn cancel_registration(&self, account_id: &ProviderAccountId) {
+        let oauth_cancellation = self
+            .inner
+            .state
+            .lock()
+            .oauth_cancellations
+            .get(account_id)
+            .cloned();
+        if let Some(cancellation) = oauth_cancellation {
+            cancellation.cancel();
+        }
         self.inner.account_supervisor.cancel(account_id).await;
     }
 
@@ -229,6 +242,23 @@ impl ProviderRuntime {
         authorization_session: &dyn ProviderAuthorizationSession,
     ) -> Result<ProviderAccountEventStream, ProviderFailure> {
         let _guard = self.begin_registration_control(request.account_id())?;
+        let cancellation = CancellationToken::new();
+        {
+            let mut state = self.inner.state.lock();
+            if state.oauth_cancellations.contains_key(request.account_id()) {
+                return Err(ProviderFailure::new(
+                    ProviderFailureCode::InvalidRequest,
+                    "provider account OAuth registration is already active",
+                ));
+            }
+            state
+                .oauth_cancellations
+                .insert(request.account_id().clone(), cancellation.clone());
+        }
+        let _oauth_cleanup = OAuthCancellationCleanup {
+            runtime: Arc::downgrade(&self.inner),
+            account_id: request.account_id().clone(),
+        };
         {
             let mut state = self.inner.state.lock();
             if !state.consumed_oauth_states.consume(request.pkce().state()) {
@@ -241,7 +271,7 @@ impl ProviderRuntime {
         let registration = self
             .inner
             .open_router_oauth
-            .authorize(request, authorization_session)
+            .authorize(request, authorization_session, &cancellation)
             .await?;
         if self
             .inner
@@ -255,7 +285,11 @@ impl ProviderRuntime {
                 "provider account is being revoked",
             )));
         }
-        Ok(self.inner.account_supervisor.register(registration).await)
+        Ok(self
+            .inner
+            .account_supervisor
+            .register_with_cancellation(registration, cancellation)
+            .await)
     }
 
     pub async fn inspect(
@@ -487,6 +521,23 @@ fn control_counter_failure() -> ProviderFailure {
 struct RevocationCleanup {
     runtime: Arc<RuntimeInner>,
     account_id: ProviderAccountId,
+}
+
+struct OAuthCancellationCleanup {
+    runtime: Weak<RuntimeInner>,
+    account_id: ProviderAccountId,
+}
+
+impl Drop for OAuthCancellationCleanup {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime
+                .state
+                .lock()
+                .oauth_cancellations
+                .remove(&self.account_id);
+        }
+    }
 }
 
 impl Drop for RevocationCleanup {

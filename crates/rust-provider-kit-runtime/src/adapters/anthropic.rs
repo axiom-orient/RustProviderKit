@@ -19,8 +19,8 @@ use crate::sse::ServerSentEvent;
 use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     core_error_failure, default_capabilities, http_failure, json_to_serde, make_json_request,
-    merge_account_headers, optional_nonnegative_u64, parse_model_catalog, require_api_key,
-    serde_to_json, tool_result_text, transport_failure, usage,
+    merge_account_headers, optional_nonnegative_u64, parse_model_catalog, provider_stream_failure,
+    require_api_key, serde_to_json, tool_result_text, transport_failure, usage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,10 +307,7 @@ impl AnthropicMessagesAdapter {
                     "thinking".into(),
                     json!({"type":"adaptive","display":"summarized"}),
                 );
-                output_config.insert(
-                    "effort".into(),
-                    Value::String(format!("{effort:?}").to_ascii_lowercase()),
-                );
+                output_config.insert("effort".into(), Value::String(effort.as_str().to_owned()));
             }
             ProviderReasoningPolicy::Effort(_) => {
                 return Err(ProviderFailure::new(
@@ -500,6 +497,13 @@ impl ProviderStreamDecoder for AnthropicMessagesStreamDecoder {
                             .and_then(ProviderJsonValue::as_str)
                             .ok_or_else(|| malformed("Messages tool block has no name"))?;
                         let initial_input = root.at(&["content_block", "input"]).cloned();
+                        if self.emitted_tool_count.saturating_add(self.tools.len())
+                            >= ProviderTurnRequest::MAXIMUM_TOOLS
+                        {
+                            return Err(malformed(
+                                "Messages stream exceeded tool-call state limit",
+                            ));
+                        }
                         if self
                             .tools
                             .insert(
@@ -622,20 +626,11 @@ impl ProviderStreamDecoder for AnthropicMessagesStreamDecoder {
                 Ok(Vec::new())
             }
             Some("message_stop") => self.complete(),
-            Some("error") => {
-                let overloaded = root
-                    .at(&["error", "type"])
-                    .and_then(ProviderJsonValue::as_str)
-                    == Some("overloaded_error");
-                Err(ProviderFailure::new(
-                    if overloaded {
-                        ProviderFailureCode::ServerFailed
-                    } else {
-                        ProviderFailureCode::TransportFailed
-                    },
-                    "Messages stream failed",
-                ))
-            }
+            Some("error") => Err(provider_stream_failure(
+                event.data.as_bytes(),
+                ProviderFailureCode::TransportFailed,
+                "Messages stream failed",
+            )),
             Some("ping") => Ok(Vec::new()),
             None => Err(malformed("Messages SSE event has no type")),
             Some(_) => Ok(Vec::new()),
