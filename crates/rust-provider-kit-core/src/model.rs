@@ -24,7 +24,6 @@ pub struct ProviderDescriptor {
     id: ProviderId,
     display_name: String,
     protocol_family: ProviderProtocolFamily,
-    supports_api_key: bool,
     supports_oauth: bool,
     requires_explicit_endpoint: bool,
 }
@@ -34,7 +33,6 @@ impl ProviderDescriptor {
         id: ProviderId,
         display_name: impl Into<String>,
         protocol_family: ProviderProtocolFamily,
-        supports_api_key: bool,
         supports_oauth: bool,
         requires_explicit_endpoint: bool,
     ) -> Result<Self, ProviderCoreError> {
@@ -44,7 +42,6 @@ impl ProviderDescriptor {
             id,
             display_name,
             protocol_family,
-            supports_api_key,
             supports_oauth,
             requires_explicit_endpoint,
         })
@@ -62,10 +59,7 @@ impl ProviderDescriptor {
     pub fn protocol_family(&self) -> ProviderProtocolFamily {
         self.protocol_family
     }
-    #[must_use]
-    pub fn supports_api_key(&self) -> bool {
-        self.supports_api_key
-    }
+
     #[must_use]
     pub fn supports_oauth(&self) -> bool {
         self.supports_oauth
@@ -77,11 +71,11 @@ impl ProviderDescriptor {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderDescriptorRaw {
     id: ProviderId,
     display_name: String,
     protocol_family: ProviderProtocolFamily,
-    supports_api_key: bool,
     supports_oauth: bool,
     #[serde(default)]
     requires_explicit_endpoint: bool,
@@ -97,7 +91,6 @@ impl<'de> Deserialize<'de> for ProviderDescriptor {
             raw.id,
             raw.display_name,
             raw.protocol_family,
-            raw.supports_api_key,
             raw.supports_oauth,
             raw.requires_explicit_endpoint,
         )

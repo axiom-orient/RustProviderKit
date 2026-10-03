@@ -117,7 +117,7 @@ fn active_lease(
     endpoint: Option<ProviderEndpointConfiguration>,
 ) -> Result<ProviderCredentialLease, ProviderCoreError> {
     let account_id = ProviderAccountId::new(format!("{}-account", provider_id.as_str()))?;
-    let material = ProviderCredentialMaterial::api_key("secret-value")?;
+    let material = ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?;
     let record = ProviderCredentialRecord::new(
         ProviderCredentialReference::new(format!("{}-credential", provider_id.as_str()))?,
         account_id,
@@ -208,6 +208,31 @@ fn registry_exposes_exact_supported_set_and_rejects_unknown() -> Result<(), Box<
         .find(|descriptor| descriptor.id() == &BuiltInProviderId::codex())
         .ok_or("Codex descriptor is missing")?;
     assert_eq!(codex.display_name(), "Codex (ChatGPT subscription)");
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_rejects_external_auth_files_outside_codex() -> Result<(), Box<dyn Error>> {
+    let runtime = ProviderRuntime::with_components(
+        Arc::new(InMemoryProviderCredentialStore::default()),
+        Arc::new(CapturingUnaryTransport::default()),
+        Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
+    )?;
+    let request = ProviderAccountRegistrationRequest::new(
+        ProviderAccountId::new("openai-external-auth")?,
+        BuiltInProviderId::open_ai(),
+        "OpenAI",
+        ProviderCredentialMaterial::external_auth_file("/tmp/openai-auth.json")?,
+        None,
+    )?;
+    let mut events = runtime.register(request).await;
+    let Some(ProviderAccountPublicEvent::Failed(failure)) = events.next().await else {
+        return Err("non-Codex external auth file was not rejected".into());
+    };
+    assert_eq!(failure.code(), ProviderFailureCode::AuthenticationFailed);
+    assert!(events.next().await.is_none());
+    runtime.shutdown().await;
     Ok(())
 }
 
@@ -518,7 +543,7 @@ async fn test_credential_store_has_a_complete_ephemeral_lifecycle() -> Result<()
         account_id.clone(),
         BuiltInProviderId::open_ai(),
         "Ephemeral OpenAI",
-        ProviderCredentialMaterial::api_key("secret-key")?,
+        ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
         None,
     )?;
     let staged = vault
@@ -576,7 +601,7 @@ async fn reconciliation_fences_new_registration_admission() -> Result<(), Box<dy
         account_id.clone(),
         BuiltInProviderId::open_ai(),
         "Primary",
-        ProviderCredentialMaterial::api_key("secret-value")?,
+        ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
         None,
     )?;
     let mut events = runtime.register(registration).await;
@@ -811,7 +836,7 @@ async fn revoke_cancels_only_executions_for_the_selected_account() -> Result<(),
             account_id,
             provider_id,
             "Primary",
-            ProviderCredentialMaterial::api_key("secret-value")?,
+            ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
             None,
         )?;
         let staged = vault
@@ -900,7 +925,7 @@ async fn revoke_waits_for_in_flight_inspection_before_removing_credentials()
         account_id.clone(),
         BuiltInProviderId::open_router(),
         "Primary",
-        ProviderCredentialMaterial::api_key("secret-value")?,
+        ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
         None,
     )?;
     let staged = vault
@@ -962,7 +987,7 @@ async fn openrouter_request_preserves_policy_tool_choice_and_output_limit()
     assert!(
         wire.headers()
             .get("authorization")
-            .is_some_and(|value| value == "Bearer secret-value")
+            .is_some_and(|value| value == "Bearer oauth-secret")
     );
     let body = ProviderJsonValue::decode(wire.body())?;
     assert_eq!(
@@ -1205,7 +1230,7 @@ async fn gemini_uses_generate_content_wire_contract() -> Result<(), Box<dyn Erro
     );
     assert_eq!(
         wire.headers().get("x-goog-api-key").map(String::as_str),
-        Some("secret-value")
+        Some("oauth-secret")
     );
     let body = ProviderJsonValue::decode(wire.body())?;
     assert!(body.get("input").is_none());
@@ -1303,7 +1328,7 @@ async fn deepseek_kimi_and_zai_use_gajae_aligned_dialects() -> Result<(), Box<dy
     );
     assert_eq!(
         zai.headers().get("authorization").map(String::as_str),
-        Some("Bearer secret-value")
+        Some("Bearer oauth-secret")
     );
     Ok(())
 }

@@ -139,12 +139,12 @@ impl OpenRouterOAuthBroker {
         cancellation_guard.disarm();
 
         let code = validate_callback(result.callback_url(), &callback, request.pkce().state())?;
-        let key = tokio::select! {
+        let credential = tokio::select! {
             biased;
             _ = cancellation.cancelled() => {
                 return Err(ProviderFailure::new(
                     ProviderFailureCode::Cancelled,
-                    "OpenRouter OAuth key exchange was cancelled",
+                    "OpenRouter OAuth exchange was cancelled",
                 ));
             }
             result = self.exchange(&code, request.pkce()) => result?,
@@ -153,7 +153,7 @@ impl OpenRouterOAuthBroker {
             request.account_id().clone(),
             BuiltInProviderId::open_router(),
             request.label(),
-            ProviderCredentialMaterial::OauthDerivedKey(key),
+            ProviderCredentialMaterial::OauthDerivedKey(credential),
             None,
         )
         .map_err(core_error_failure)
@@ -201,16 +201,16 @@ impl OpenRouterOAuthBroker {
                 "OpenRouter OAuth response JSON is malformed",
             )
         })?;
-        let key = root
+        let credential = root
             .get("key")
             .and_then(ProviderJsonValue::as_str)
             .ok_or_else(|| {
                 ProviderFailure::new(
                     ProviderFailureCode::MalformedResponse,
-                    "OpenRouter OAuth key exchange returned no API key",
+                    "OpenRouter OAuth exchange returned no credential",
                 )
             })?;
-        SensitiveValue::new(key).map_err(core_error_failure)
+        SensitiveValue::new(credential).map_err(core_error_failure)
     }
 }
 

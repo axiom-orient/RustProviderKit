@@ -20,7 +20,7 @@ use crate::sse::ServerSentEvent;
 use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, append_path, array, core_error_failure,
     http_failure, json_to_serde, make_json_request, merge_account_headers,
-    optional_nonnegative_u64, optional_string, provider_stream_failure, require_api_key,
+    optional_nonnegative_u64, optional_string, provider_stream_failure, require_oauth_bearer,
     serde_to_json, tool_result_text, transport_failure, usage,
 };
 
@@ -38,7 +38,6 @@ impl GeminiGenerateContentAdapter {
             "Google Gemini",
             ProviderProtocolFamily::GeminiGenerateContent,
             true,
-            false,
             false,
         )
         .map_err(core_error_failure)?;
@@ -318,7 +317,7 @@ impl ProviderAdapter for GeminiGenerateContentAdapter {
         request: &ProviderTurnRequest,
         credential: &ProviderCredentialLease,
     ) -> Result<ProviderHttpRequest, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         make_json_request(
             Method::POST,
             self.execution_endpoint(request, credential)?,
@@ -367,7 +366,7 @@ impl ProviderAdapter for GeminiGenerateContentAdapter {
         transport: &dyn ProviderHttpTransport,
         now: ProviderInstant,
     ) -> Result<ProviderModelCatalogResult, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         let endpoint = append_path("/models", &self.base_url(credential)?)?;
         let constraints = ProviderRequestConstraints::new(
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,

@@ -408,7 +408,7 @@ mod tests {
             ProviderAccountId::new("cancel-stage-account")?,
             BuiltInProviderId::open_router(),
             "Primary",
-            ProviderCredentialMaterial::api_key("test-secret")?,
+            ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
             None,
         )?)
     }

@@ -52,7 +52,7 @@ fn registration() -> Result<ProviderAccountRegistrationRequest, ProviderCoreErro
         ProviderAccountId::new("account-main")?,
         BuiltInProviderId::open_ai(),
         "Primary",
-        ProviderCredentialMaterial::api_key("secret-value")?,
+        ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
         None,
     )
 }
@@ -63,7 +63,7 @@ fn staged_record() -> Result<ProviderCredentialRecord, ProviderCoreError> {
         ProviderAccountId::new("account-main")?,
         BuiltInProviderId::open_ai(),
         "Primary",
-        ProviderCredentialSource::ApiKey,
+        ProviderCredentialSource::OauthDerivedKey,
         ProviderCredentialRecordState::Staged,
         None,
         ProviderInstant::from_unix_milliseconds(10),
@@ -92,6 +92,38 @@ fn identifiers_validate_and_round_trip() -> Result<(), Box<dyn Error>> {
     assert!(ProviderRequestId::new(" contains-space ").is_err());
     assert_eq!(BuiltInProviderId::all().len(), 10);
     Ok(())
+}
+
+#[test]
+fn provider_descriptor_credential_capabilities_are_closed() -> Result<(), Box<dyn Error>> {
+    let descriptor = ProviderDescriptor::new(
+        BuiltInProviderId::codex(),
+        "Codex",
+        ProviderProtocolFamily::CodexResponses,
+        true,
+        false,
+    )?;
+    let encoded = serde_json::to_value(&descriptor)?;
+    assert!(encoded.get("supports_api_key").is_none());
+    assert_eq!(encoded["supports_oauth"], true);
+    assert!(
+        serde_json::from_value::<ProviderDescriptor>(serde_json::json!({
+            "id": "codex",
+            "display_name": "Codex",
+            "protocol_family": "codex_responses",
+            "supports_oauth": true,
+            "requires_explicit_endpoint": false,
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_api_key_credential_wire_is_rejected() {
+    assert!(serde_json::from_str::<ProviderCredentialSource>("\"api_key\"").is_err());
+    assert!(serde_json::from_str::<ProviderCredentialSource>("\"oauth_derived_key\"").is_ok());
 }
 
 #[test]
@@ -356,7 +388,7 @@ fn endpoint_and_authorization_inputs_fail_closed() -> Result<(), Box<dyn Error>>
 #[test]
 fn credential_lease_requires_active_matching_material() -> Result<(), Box<dyn Error>> {
     let staged = staged_record()?;
-    let material = ProviderCredentialMaterial::api_key("secret-value")?;
+    let material = ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?;
     assert!(ProviderCredentialLease::new(staged.clone(), material.clone()).is_err());
     assert!(ProviderCredentialLease::for_verification(staged, material).is_ok());
     Ok(())
@@ -465,7 +497,7 @@ fn inconsistent_staged_record_enters_compensation() -> Result<(), Box<dyn Error>
         ProviderAccountId::new("different-account")?,
         BuiltInProviderId::open_ai(),
         "Primary",
-        ProviderCredentialSource::ApiKey,
+        ProviderCredentialSource::OauthDerivedKey,
         ProviderCredentialRecordState::Staged,
         None,
         ProviderInstant::from_unix_milliseconds(10),

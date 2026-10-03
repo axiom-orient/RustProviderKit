@@ -48,30 +48,24 @@ impl fmt::Display for SensitiveValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderCredentialSource {
-    ApiKey,
     OauthDerivedKey,
     ExternalAuthFileReference,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum ProviderCredentialMaterial {
-    ApiKey(SensitiveValue),
     OauthDerivedKey(SensitiveValue),
     ExternalAuthFile(PathBuf),
 }
 impl fmt::Debug for ProviderCredentialMaterial {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ApiKey(_) => formatter.write_str("ApiKey(<redacted>)"),
             Self::OauthDerivedKey(_) => formatter.write_str("OauthDerivedKey(<redacted>)"),
             Self::ExternalAuthFile(_) => formatter.write_str("ExternalAuthFile(<redacted>)"),
         }
     }
 }
 impl ProviderCredentialMaterial {
-    pub fn api_key(value: impl Into<String>) -> Result<Self, ProviderCoreError> {
-        SensitiveValue::new(value).map(Self::ApiKey)
-    }
     pub fn oauth_derived_key(value: impl Into<String>) -> Result<Self, ProviderCoreError> {
         SensitiveValue::new(value).map(Self::OauthDerivedKey)
     }
@@ -90,7 +84,6 @@ impl ProviderCredentialMaterial {
     #[must_use]
     pub fn source(&self) -> ProviderCredentialSource {
         match self {
-            Self::ApiKey(_) => ProviderCredentialSource::ApiKey,
             Self::OauthDerivedKey(_) => ProviderCredentialSource::OauthDerivedKey,
             Self::ExternalAuthFile(_) => ProviderCredentialSource::ExternalAuthFileReference,
         }
@@ -98,7 +91,7 @@ impl ProviderCredentialMaterial {
     #[must_use]
     pub fn secret(&self) -> Option<&SensitiveValue> {
         match self {
-            Self::ApiKey(value) | Self::OauthDerivedKey(value) => Some(value),
+            Self::OauthDerivedKey(value) => Some(value),
             Self::ExternalAuthFile(_) => None,
         }
     }

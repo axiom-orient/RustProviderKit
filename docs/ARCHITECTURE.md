@@ -85,6 +85,14 @@ caller input
 
 ## 5. Account 경계
 
+Credential admission is authentication-only: direct API-key material is not a
+core value and cannot be registered. OAuth-derived material is accepted through
+the caller-owned credential port. Codex subscription access is represented by an
+external `auth.json` reference and is registered through
+`register_codex_subscription`; OpenRouter's PKCE flow stores only its
+OAuth-derived credential. External auth-file references are Codex-only, and the
+runtime never copies or persists the referenced file.
+
 - `account_supervisor.rs`: registration inventory/admission, reconciliation fence, account block, cancel/join, inspect/models
 - `registration_session.rs`: 한 registration의 reducer event→effect 해석과 compensation
 - `credential_contract.rs`: vault record와 lease material의 fail-closed 교차 검증

@@ -100,7 +100,7 @@ shutdown/join completes before the success line.
   enforce their own timeout, response, retry, and output-token bounds.
 - Provider/account/model 선택은 독립 값이며 lease의 account/provider/source/active state와 일치해야 한다.
 - HTTP request는 absolute HTTPS, no userinfo/fragment, valid header여야 한다.
-- Account endpoint는 최대 16개의 non-sensitive integration header를 가질 수 있다. 인증, API key, `accept`, content/host/connection/transfer header 재정의는 거부한다.
+- Account endpoint는 최대 16개의 non-sensitive integration header를 가질 수 있다. 인증, credential, `accept`, content/host/connection/transfer header 재정의는 거부한다.
 - JSON request는 default `Accept: application/json`, body가 있는 adapter는 `Content-Type: application/json`을 가진다.
 - execution timeout은 typed HTTP request와 reqwest까지 전달한다.
 - loopback callback은 exact `127.0.0.1:port/path`, Host, state, percent encoding을 검증한다.

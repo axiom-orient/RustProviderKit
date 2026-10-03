@@ -20,7 +20,7 @@ use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     core_error_failure, default_capabilities, http_failure, json_to_serde, make_json_request,
     merge_account_headers, optional_nonnegative_u64, parse_model_catalog, provider_stream_failure,
-    require_api_key, serde_to_json, tool_result_text, transport_failure, usage,
+    require_oauth_bearer, serde_to_json, tool_result_text, transport_failure, usage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +44,6 @@ impl AnthropicMessagesAdapter {
                 ProviderProtocolFamily::AnthropicMessages,
                 true,
                 false,
-                false,
             ),
             AnthropicMessagesKind::Zai => ProviderDescriptor::new(
                 BuiltInProviderId::zai(),
@@ -52,14 +51,12 @@ impl AnthropicMessagesAdapter {
                 ProviderProtocolFamily::AnthropicMessages,
                 true,
                 false,
-                false,
             ),
             AnthropicMessagesKind::MiniMax => ProviderDescriptor::new(
                 BuiltInProviderId::mini_max(),
                 "MiniMax",
                 ProviderProtocolFamily::AnthropicMessages,
                 true,
-                false,
                 false,
             ),
         }
@@ -333,7 +330,7 @@ impl ProviderAdapter for AnthropicMessagesAdapter {
         request: &ProviderTurnRequest,
         credential: &ProviderCredentialLease,
     ) -> Result<ProviderHttpRequest, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         let endpoint = append_path("/v1/messages", &self.execution_base_url(credential)?)?;
         make_json_request(
             Method::POST,
@@ -372,7 +369,7 @@ impl ProviderAdapter for AnthropicMessagesAdapter {
         transport: &dyn ProviderHttpTransport,
         now: ProviderInstant,
     ) -> Result<ProviderModelCatalogResult, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         let endpoint = append_path("/v1/models", &self.model_base_url(credential)?)?;
         let mut headers = self.headers(key);
         headers.insert("accept".into(), "application/json".into());

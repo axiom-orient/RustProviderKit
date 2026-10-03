@@ -1,13 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 use rust_provider_kit_core::{
-    ProviderAccountEventStream, ProviderAccountId, ProviderAccountInspection,
+    BuiltInProviderId, ProviderAccountEventStream, ProviderAccountId, ProviderAccountInspection,
     ProviderAccountRegistrationRequest, ProviderAccountSummary, ProviderAuthorizationSession,
-    ProviderClock, ProviderCredentialReconciliationReport, ProviderCredentialStore,
-    ProviderDescriptor, ProviderEventStream, ProviderFailure, ProviderFailureCode,
-    ProviderModelCatalogResult, ProviderRequestId, ProviderTurnRequest, SystemProviderClock,
+    ProviderClock, ProviderCredentialMaterial, ProviderCredentialReconciliationReport,
+    ProviderCredentialStore, ProviderDescriptor, ProviderEventStream, ProviderFailure,
+    ProviderFailureCode, ProviderModelCatalogResult, ProviderRequestId, ProviderTurnRequest,
+    SystemProviderClock,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -188,7 +190,70 @@ impl ProviderRuntime {
                 return ProviderAccountEventStream::failed(failure);
             }
         };
+        if let Err(failure) = self.validate_credential_mode(&request) {
+            return ProviderAccountEventStream::failed(failure);
+        }
         self.inner.account_supervisor.register(request).await
+    }
+
+    fn validate_credential_mode(
+        &self,
+        request: &ProviderAccountRegistrationRequest,
+    ) -> Result<(), ProviderFailure> {
+        let descriptor = self
+            .inner
+            .registry
+            .adapter(request.provider_id())?
+            .descriptor()
+            .clone();
+        match request.credential() {
+            ProviderCredentialMaterial::ExternalAuthFile(_) => {
+                if request.provider_id() != &BuiltInProviderId::codex() {
+                    return Err(ProviderFailure::new(
+                        ProviderFailureCode::AuthenticationFailed,
+                        "external auth files are supported only for Codex subscription accounts",
+                    ));
+                }
+            }
+            ProviderCredentialMaterial::OauthDerivedKey(_) => {
+                if !descriptor.supports_oauth() {
+                    return Err(ProviderFailure::new(
+                        ProviderFailureCode::AuthenticationFailed,
+                        "provider has no supported OAuth registration flow",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Register a Codex account backed by a user-authenticated ChatGPT
+    /// subscription session. The path is only a reference; the runtime never
+    /// copies or persists the auth file.
+    pub async fn register_codex_subscription(
+        &self,
+        account_id: ProviderAccountId,
+        label: impl Into<String>,
+        auth_file: impl Into<PathBuf>,
+    ) -> ProviderAccountEventStream {
+        let request = ProviderCredentialMaterial::external_auth_file(auth_file.into()).and_then(
+            |credential| {
+                ProviderAccountRegistrationRequest::new(
+                    account_id,
+                    BuiltInProviderId::codex(),
+                    label,
+                    credential,
+                    None,
+                )
+            },
+        );
+        match request {
+            Ok(request) => self.register(request).await,
+            Err(error) => ProviderAccountEventStream::failed(ProviderFailure::new(
+                ProviderFailureCode::InvalidRequest,
+                error.to_string(),
+            )),
+        }
     }
 
     pub async fn cancel_registration(&self, account_id: &ProviderAccountId) {

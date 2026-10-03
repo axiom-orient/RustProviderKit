@@ -207,13 +207,14 @@ pub(crate) fn optional_string<'a>(
     }
 }
 
-pub(crate) fn require_api_key(lease: &ProviderCredentialLease) -> Result<&str, ProviderFailure> {
+pub(crate) fn require_oauth_bearer(
+    lease: &ProviderCredentialLease,
+) -> Result<&str, ProviderFailure> {
     match lease.material() {
-        ProviderCredentialMaterial::ApiKey(value)
-        | ProviderCredentialMaterial::OauthDerivedKey(value) => Ok(value.expose()),
+        ProviderCredentialMaterial::OauthDerivedKey(value) => Ok(value.expose()),
         ProviderCredentialMaterial::ExternalAuthFile(_) => Err(ProviderFailure::new(
             ProviderFailureCode::AuthenticationFailed,
-            "provider requires an API key credential",
+            "provider requires an OAuth-derived credential",
         )),
     }
 }

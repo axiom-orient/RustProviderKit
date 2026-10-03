@@ -20,7 +20,7 @@ not depend on each other.
 ## Public surface
 
 - Core: values, errors, events, reducers, and credential/clock/authorization ports
-- Runtime: `ProviderRuntime`, `ProviderRuntimeOptions`, and `OpenRouterOAuthRegistrationRequest`
+- Runtime: `ProviderRuntime`, `ProviderRuntimeOptions`, `register_codex_subscription`, and `OpenRouterOAuthRegistrationRequest`
 - Platform: `ProviderPkceGenerator`, `LoopbackAuthorizationSession`, and `PreparedLoopbackAuthorization`
 
 HTTP transport, provider codecs, supervisors, sessions, callback parsing, and
@@ -29,6 +29,19 @@ test seams remain private.
 Supported providers are `codex`, `openai`, `anthropic`, `gemini`, `openrouter`,
 `deepseek`, `qwen`, `kimi`, `zai`, and `minimax`. Unknown providers and all
 provider fallback are rejected.
+
+Credential admission is authentication-only: direct API-key material is not
+part of the public contract. OAuth-derived material is accepted through the
+caller-owned credential port; the runtime provides PKCE OAuth registration for
+OpenRouter. Codex uses a user-authenticated ChatGPT subscription session
+referenced by an absolute `auth.json` path (`codex login`). External auth-file
+references are rejected for every provider except Codex.
+
+```rust,no_run
+let events = runtime
+    .register_codex_subscription(account_id, "ChatGPT subscription", auth_file)
+    .await;
+```
 
 The `rgxamk-native-provider` leaf is a process adapter, not a runtime extension.
 It accepts only explicit Codex arguments, an absolute `auth.json` reference, and
@@ -95,3 +108,7 @@ external TLS or application policy. `target/`, logs, local environment files, an
 provider credentials are not source inputs. A clean verified commit is required
 before creating a semantic-version tag or publishing a GitHub Release; the local
 gate is the release evidence and GitHub Actions are intentionally out of scope.
+
+## GitHub 배포 분류
+
+RustProviderKit의 주 제품은 개발자가 import하고 provider adapter를 조합하는 Rust SDK이므로 canonical 조직은 [`axiom-orient`](https://github.com/axiom-orient)다. 검증용 binary는 패키지 분류를 바꾸지 않는다.

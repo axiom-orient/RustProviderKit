@@ -23,7 +23,7 @@ use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     core_error_failure, default_capabilities, http_failure, json_to_serde, make_json_request,
     malformed, merge_account_headers, optional_nonnegative_u64, parse_model_catalog,
-    provider_stream_failure, require_api_key, require_server_side_continuation_opt_in,
+    provider_stream_failure, require_oauth_bearer, require_server_side_continuation_opt_in,
     serde_to_json, stores_server_side_response, tool_result_text, transport_failure, usage,
 };
 
@@ -57,8 +57,7 @@ impl OpenAiResponsesAdapter {
                 BuiltInProviderId::codex(),
                 "Codex (ChatGPT subscription)",
                 ProviderProtocolFamily::CodexResponses,
-                false,
-                false,
+                true,
                 false,
             ),
             OpenAiResponsesKind::OpenAi => ProviderDescriptor::new(
@@ -66,7 +65,6 @@ impl OpenAiResponsesAdapter {
                 "OpenAI",
                 ProviderProtocolFamily::OpenAiResponses,
                 true,
-                false,
                 false,
             ),
         }
@@ -349,7 +347,7 @@ impl OpenAiResponsesAdapter {
     ) -> Result<(url::Url, BTreeMap<String, String>), ProviderFailure> {
         match self.kind {
             OpenAiResponsesKind::OpenAi => {
-                let key = require_api_key(lease)?;
+                let key = require_oauth_bearer(lease)?;
                 let base = match lease.record().endpoint() {
                     Some(value) => value.base_url().clone(),
                     None => ProviderEndpointCatalog::open_ai()?,

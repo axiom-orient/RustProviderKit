@@ -21,8 +21,8 @@ use crate::wire::{
     ProviderCompletionDraft, ProviderDecodedEvent, ProviderToolArgumentAccumulator, append_path,
     array, core_error_failure, default_capabilities, http_failure, json_to_serde,
     make_json_request, merge_account_headers, optional_nonnegative_u64, optional_string,
-    parse_model_catalog, provider_stream_failure, require_api_key, serde_to_json, tool_result_text,
-    transport_failure, usage,
+    parse_model_catalog, provider_stream_failure, require_oauth_bearer, serde_to_json,
+    tool_result_text, transport_failure, usage,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,18 +40,17 @@ pub(crate) struct OpenAiChatAdapter {
 }
 impl OpenAiChatAdapter {
     pub(crate) fn new(kind: OpenAiChatKind) -> Result<Self, ProviderFailure> {
-        let (id, name, oauth) = match kind {
-            OpenAiChatKind::OpenRouter => (BuiltInProviderId::open_router(), "OpenRouter", true),
-            OpenAiChatKind::DeepSeek => (BuiltInProviderId::deep_seek(), "DeepSeek", false),
-            OpenAiChatKind::Qwen => (BuiltInProviderId::qwen(), "Qwen Portal", false),
-            OpenAiChatKind::Kimi => (BuiltInProviderId::kimi(), "Kimi Code", false),
+        let (id, name) = match kind {
+            OpenAiChatKind::OpenRouter => (BuiltInProviderId::open_router(), "OpenRouter"),
+            OpenAiChatKind::DeepSeek => (BuiltInProviderId::deep_seek(), "DeepSeek"),
+            OpenAiChatKind::Qwen => (BuiltInProviderId::qwen(), "Qwen Portal"),
+            OpenAiChatKind::Kimi => (BuiltInProviderId::kimi(), "Kimi Code"),
         };
         let descriptor = ProviderDescriptor::new(
             id,
             name,
             ProviderProtocolFamily::OpenAiChatCompletions,
             true,
-            oauth,
             false,
         )
         .map_err(core_error_failure)?;
@@ -412,7 +411,7 @@ impl ProviderAdapter for OpenAiChatAdapter {
         request: &ProviderTurnRequest,
         credential: &ProviderCredentialLease,
     ) -> Result<ProviderHttpRequest, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         let base = self.base_url(credential.record())?;
         let endpoint = append_path("/chat/completions", &base)?;
         let mut headers = BTreeMap::from([
@@ -465,7 +464,7 @@ impl ProviderAdapter for OpenAiChatAdapter {
         transport: &dyn ProviderHttpTransport,
         now: ProviderInstant,
     ) -> Result<ProviderModelCatalogResult, ProviderFailure> {
-        let key = require_api_key(credential)?;
+        let key = require_oauth_bearer(credential)?;
         let endpoint = append_path("/models", &self.base_url(credential.record())?)?;
         let constraints = ProviderRequestConstraints::new(
             rust_provider_kit_core::ProviderDataCollectionPolicy::Deny,
