@@ -173,3 +173,27 @@ Provider endpoint fallback은 지원하지 않는다. OpenRouter 요청도 fallb
 ## Non-goals
 
 Agent orchestration, tool 실행, UI, conversation/run persistence, credential vault 구현, cross-provider fallback은 이 workspace의 책임이 아니다.
+
+## Local commands
+
+```bash
+./scripts/verify.sh
+./scripts/clean.sh
+```
+
+`verify.sh` is the canonical local gate: format, locked workspace check,
+warnings-as-errors Clippy, tests, repository hygiene, and the no-GitHub-workflow
+guard. `clean.sh` removes only repository-local generated artifacts. `Cargo.lock`
+is retained for reproducible local verification.
+
+GitHub Actions, CI/CD workflows, and release automation are intentionally not
+part of this repository. Do not add files under `.github/workflows/`.
+
+## Publication boundary
+
+This repository publishes the Rust contracts and local verification surface. The
+caller remains responsible for durable credential storage, host authorization, and
+external TLS or application policy. `target/`, logs, local environment files, and
+provider credentials are not source inputs. A clean verified commit is required
+before creating a semantic-version tag or publishing a GitHub Release; the local
+gate is the release evidence and GitHub Actions are intentionally out of scope.
