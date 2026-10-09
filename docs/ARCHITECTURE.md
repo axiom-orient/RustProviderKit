@@ -73,6 +73,7 @@ caller input
 → bounded HTTP worker and chunk queue
 → incremental SSE parser
 → stateful provider dialect decoder
+→ declared tool-name and named-choice scope check
 → explicit ProviderExecutionEvent
 → pure reducer plan
 → effect interpreter

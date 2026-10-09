@@ -366,6 +366,22 @@ impl ExecutionSession {
                 self.transition_and_publish(ProviderExecutionEvent::TextDeltaReceived(value))?;
             }
             ProviderDecodedEvent::ToolCall(call) => {
+                let declared = self
+                    .request
+                    .tools()
+                    .iter()
+                    .any(|tool| tool.name() == call.name());
+                let selected = match self.request.tool_choice().named_value() {
+                    Some(name) => name == call.name(),
+                    None => true,
+                };
+                if !declared || !selected {
+                    return Err(ProviderFailure::new(
+                        ProviderFailureCode::CapabilityMismatch,
+                        "provider returned a tool outside the request scope",
+                    )
+                    .with_request_id(self.request.id().clone()));
+                }
                 self.transition_and_publish(ProviderExecutionEvent::ToolCallCompleted(call))?;
             }
             ProviderDecodedEvent::Completion(draft) => {

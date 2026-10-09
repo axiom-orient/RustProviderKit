@@ -115,6 +115,7 @@ Started
 ```
 
 - adjacent text와 reasoning은 같은 종류·순서 보존 조건에서만 coalesce하며 서로 합쳐지지 않는다.
+- Provider tool call은 요청에 선언된 tool name과 일치해야 한다. `Named` choice를 지정하면 그 이름의 call만 공개하고, 그 밖의 call은 `CapabilityMismatch` terminal로 닫는다.
 - terminal slot은 backlog와 별도로 예약한다.
 - terminal은 transport termination과 cleanup 뒤에 공개한다.
 - visible output 이후에는 retry하지 않는다.
@@ -151,7 +152,7 @@ Provider endpoint fallback은 지원하지 않는다. OpenRouter 요청도 fallb
 
 ## Error
 
-`ProviderFailureCode`는 invalid request, unsupported provider/capability, account/auth/permission, transport/server/rate-limit, malformed/oversized response, backpressure, cancellation, timeout, recovery requirement, internal invariant를 구분한다.
+`ProviderFailureCode`는 invalid request, unsupported provider/capability (including a provider tool call outside the declared tool scope), account/auth/permission, transport/server/rate-limit, malformed/oversized response, backpressure, cancellation, timeout, recovery requirement, internal invariant를 구분한다.
 
 - reqwest timeout은 `TimedOut`으로 분류한다.
 - 429는 동일하지 않다. 짧은 rolling-window 제한은 `retry_soon`,

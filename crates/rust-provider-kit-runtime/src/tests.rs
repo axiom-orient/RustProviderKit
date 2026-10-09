@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +90,93 @@ fn request_for_reasoning_and_tool_choice(
             Some(4_096),
         )?,
     )
+}
+
+fn request_with_tools(
+    provider_id: ProviderId,
+    request_id: &str,
+    tool_names: &[&str],
+    tool_choice: ProviderToolChoice,
+) -> Result<ProviderTurnRequest, ProviderCoreError> {
+    let account_id = ProviderAccountId::new(format!("{}-account", provider_id.as_str()))?;
+    let selection =
+        ProviderSelection::new(provider_id, account_id, ProviderModelId::new("model-test")?);
+    let tools = tool_names
+        .iter()
+        .map(|name| ProviderToolDefinition::new(*name, format!("Use {name}"), schema(), true))
+        .collect::<Result<Vec<_>, _>>()?;
+    ProviderTurnRequest::new(
+        ProviderRequestId::new(request_id)?,
+        selection,
+        vec![ProviderMessage::text(ProviderMessageRole::User, "hello")?],
+        tools,
+        tool_choice,
+        ProviderOutputRequirement::Text,
+        ProviderReasoningPolicy::Automatic,
+        None,
+        ProviderRequestConstraints::default(),
+    )
+}
+
+#[derive(Clone)]
+struct ScriptedChatToolTransport {
+    tool_names: Arc<ParkingMutex<VecDeque<String>>>,
+}
+
+struct NoopTransportControl;
+
+#[async_trait]
+impl ProviderTransportControl for NoopTransportControl {
+    fn cancel(&self) {}
+
+    async fn wait_for_termination(&self) {}
+}
+
+#[async_trait]
+impl ProviderHttpTransport for ScriptedChatToolTransport {
+    async fn open(
+        &self,
+        _request: ProviderHttpRequest,
+    ) -> Result<ProviderHttpResponse, ProviderTransportError> {
+        let tool_name = self
+            .tool_names
+            .lock()
+            .pop_front()
+            .ok_or(ProviderTransportError::Failed)?;
+        let tool_event = serde_json::json!({
+            "id": "chatcmpl-test",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": "{}"}
+                }]},
+                "finish_reason": null
+            }]
+        });
+        let finish_event = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let body = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            serde_json::to_string(&tool_event).map_err(|_| ProviderTransportError::Failed)?,
+            serde_json::to_string(&finish_event).map_err(|_| ProviderTransportError::Failed)?,
+        );
+        ProviderHttpResponse::new(
+            200,
+            BTreeMap::from([("content-type".to_owned(), "text/event-stream".to_owned())]),
+            Box::pin(stream::iter([Ok::<_, ProviderTransportError>(
+                Bytes::from(body),
+            )])),
+            ProviderHttpResponseControl::new(Arc::new(NoopTransportControl)),
+        )
+    }
 }
 
 fn request_for_account(
@@ -883,6 +970,80 @@ async fn revoke_cancels_only_executions_for_the_selected_account() -> Result<(),
 
     runtime.cancel(open_ai_request.id()).await;
     assert!(transport.was_cancelled("api.openai.com"));
+    runtime.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_rejects_tool_calls_outside_declared_and_named_tool_scope()
+-> Result<(), Box<dyn Error>> {
+    let vault = Arc::new(InMemoryProviderCredentialStore::default());
+    let account_id = ProviderAccountId::new("openrouter-account")?;
+    let registration = ProviderAccountRegistrationRequest::new(
+        account_id.clone(),
+        BuiltInProviderId::open_router(),
+        "Primary",
+        ProviderCredentialMaterial::oauth_derived_key("oauth-secret")?,
+        None,
+    )?;
+    let staged = vault
+        .stage(&registration, ProviderInstant::from_unix_milliseconds(1))
+        .await?;
+    vault
+        .activate(&staged, ProviderInstant::from_unix_milliseconds(2))
+        .await?;
+
+    let transport = Arc::new(ScriptedChatToolTransport {
+        tool_names: Arc::new(ParkingMutex::new(VecDeque::from([
+            "unlisted".to_owned(),
+            "archive".to_owned(),
+        ]))),
+    });
+    let runtime = ProviderRuntime::with_components(
+        vault,
+        transport,
+        Arc::new(SystemProviderClock),
+        &ProviderRuntimeOptions::default(),
+    )?;
+    let requests = [
+        request_with_tools(
+            BuiltInProviderId::open_router(),
+            "tool-scope-unlisted",
+            &["lookup"],
+            ProviderToolChoice::named("lookup")?,
+        )?,
+        request_with_tools(
+            BuiltInProviderId::open_router(),
+            "tool-scope-not-selected",
+            &["lookup", "archive"],
+            ProviderToolChoice::named("lookup")?,
+        )?,
+    ];
+
+    for request in requests {
+        let mut events = runtime.execute(request).await;
+        let mut saw_tool_call = false;
+        let mut terminal = None;
+        while let Some(event) = events.next().await {
+            match event {
+                ProviderTurnEvent::ToolCall(_) => saw_tool_call = true,
+                ProviderTurnEvent::Terminal(value) => {
+                    terminal = Some(value);
+                    break;
+                }
+                ProviderTurnEvent::Started(_)
+                | ProviderTurnEvent::ReasoningDelta(_)
+                | ProviderTurnEvent::TextDelta(_) => {}
+            }
+        }
+        assert!(!saw_tool_call, "out-of-scope tool call became public");
+        assert!(matches!(
+            terminal,
+            Some(ProviderTerminal::Failed(failure))
+                if failure.code() == ProviderFailureCode::CapabilityMismatch
+        ));
+    }
+
     runtime.shutdown().await;
     Ok(())
 }
