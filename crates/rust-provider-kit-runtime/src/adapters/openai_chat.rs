@@ -657,7 +657,14 @@ impl ProviderStreamDecoder for OpenAiChatStreamDecoder {
                     if let Some(function) = raw_call.get("function") {
                         if let Some(name) = optional_string(function.get("name"), "chat tool name")?
                         {
-                            state.name = Some(name.to_owned());
+                            let accumulated = state.name.get_or_insert_with(String::new);
+                            if accumulated.len().saturating_add(name.len()) > 128 {
+                                return Err(ProviderFailure::new(
+                                    ProviderFailureCode::MalformedResponse,
+                                    "chat tool name exceeds its byte limit",
+                                ));
+                            }
+                            accumulated.push_str(name);
                         }
                         if let Some(arguments) =
                             optional_string(function.get("arguments"), "chat tool arguments")?

@@ -1568,6 +1568,36 @@ fn openai_chat_decoder_normalizes_text_usage_and_completion() -> Result<(), Box<
 }
 
 #[test]
+fn openai_chat_decoder_accumulates_fragmented_tool_names_before_scope_check()
+-> Result<(), Box<dyn Error>> {
+    let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
+    let request = request_for(BuiltInProviderId::open_router())?;
+    let adapter = registry.adapter(request.selection().provider_id())?;
+    let mut decoder = adapter.make_decoder(&request)?;
+    for payload in [
+        r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"look","arguments":""}}]},"finish_reason":null}]}"#,
+        r#"{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"up","arguments":"{}"}}]},"finish_reason":null}]}"#,
+    ] {
+        assert!(decoder.consume(&event(None, payload))?.is_empty());
+    }
+    assert!(
+        decoder
+            .consume(&event(
+                None,
+                r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ))?
+            .is_empty()
+    );
+    let completed = decoder.consume(&event(None, "[DONE]"))?;
+    assert!(matches!(
+        completed.as_slice(),
+        [ProviderDecodedEvent::ToolCall(call), ProviderDecodedEvent::Completion(_)]
+            if call.name() == "lookup"
+    ));
+    Ok(())
+}
+
+#[test]
 fn openai_chat_decoder_fails_closed_on_malformed_optional_fields() -> Result<(), Box<dyn Error>> {
     let registry = BuiltInProviderRegistry::new(&ProviderRuntimeOptions::default())?;
     let request = request_for(BuiltInProviderId::open_router())?;
